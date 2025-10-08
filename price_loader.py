@@ -7,8 +7,6 @@ daily adjusted close prices for all S&P 500 tickers
 i.e some of the tickers you have today won't be 
 the same as the real ones from 2015 - it doesn't matter)
 
-Time range: January 1, 2005 to January 1, 2025
-
 Data will be:
 1. stored locally using parquets
 2. implemented using PriceLoader class to manage access

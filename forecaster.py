@@ -89,7 +89,7 @@ class Forecaster:
         model.summary()
 
         model.compile(loss='mean_squared_error', optimizer='adam')
-        model.fit(x_train, y_train, epochs=100, batch_size=32, verbose=2)
+        model.fit(x_train, y_train, epochs=10, batch_size=32, verbose=2)
 
 
         # Generates predictions on test set using last training data
@@ -161,11 +161,11 @@ class Forecaster:
         plt.show()
 
 
-    def run_LSTM(self, n_lookback = 60, n_forecast = 53):
+    def run_LSTM(self, n_lookback = 1, n_forecast = 53):
 
         # Splits data into test and training set
         train_data = self.price_df.iloc[:-n_forecast]
-        test_data = self.price_df.iloc[-n_forecast:]
+        test_data = self.price_df.iloc[self.price_df.shape[0]-n_forecast:]
         print("Training")
         print(train_data)
         print("Testing")
@@ -252,7 +252,7 @@ class Forecaster:
         x_pred_seq = scaled_train[-n_lookback:].reshape(1, n_lookback, 1)
         print("Trying to predict with")
         print(x_pred_seq)
-        y_pred = scaler.inverse_transform(model.predict(x_pred_seq.reshape(1, n_lookback, 1))).flatten()
+        y_pred = scaler.inverse_transform(model.predict(x_pred_seq)).flatten()
         y_pred_df = pd.DataFrame(y_pred, columns=['Price'])
         print("RAW")
         print(model.predict(x_pred_seq.reshape(1, n_lookback, 1)))
@@ -313,8 +313,8 @@ class Forecaster:
 
     def run_XGBoost(self):
         # Parameters
-        n_forecast = 10  # number of days into the future to predict
-        lags = 10  # number of lag days to use as features
+        n_forecast = 53  # number of days into the future to predict
+        lags = 30  # number of lag days to use as features
 
         # Load stock data
         df = self.price_df
@@ -369,7 +369,7 @@ class Forecaster:
 
     def run_XGBoostv2(self):
         # Parameters
-        n_forecast = 30  # how many days ahead we want to forecast iteratively
+        n_forecast = 53  # how many days ahead we want to forecast iteratively
         lags = 30  # how many past days to use as input
 
         df = self.price_df.copy()
