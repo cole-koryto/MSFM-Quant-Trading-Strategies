@@ -2,13 +2,12 @@ import datetime
 import math
 import pandas as pd
 import numpy as np
-import tensorflow as tf
 from matplotlib import pyplot as plt
 from pyarrow.compute import scalar
 from xgboost import XGBRegressor
 from sklearn.metrics import mean_squared_error, mean_absolute_error
-# from tensorflow.keras.layers import Dense, LSTM, Input, Dropout
-# from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, LSTM, Input, Dropout
+from tensorflow.keras.models import Sequential
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
 class Forecaster:
@@ -51,57 +50,57 @@ class Forecaster:
         x_train = np.array(x_train)
         y_train = np.array(y_train)
 
-        # Creates LSTM model
-        model = Sequential()
-        model.add(Input(shape=(n_lookback, 1)))
-        model.add(LSTM(units=50, return_sequences=True))
-        model.add(LSTM(units=50))
-        model.add(Dense(1))
-        model.compile(loss='mean_squared_error', optimizer='adam')
-        model.fit(x_train, y_train, epochs=10, batch_size=32, verbose=2)
-
-
-        # # Initialize model
+        # # Creates LSTM model
         # model = Sequential()
         # model.add(Input(shape=(n_lookback, 1)))
-        # # LSTM layer 1
         # model.add(LSTM(units=50, return_sequences=True))
-        # model.add(Dropout(0.20))
-        # # LSTM layer 2
-        # model.add(LSTM(units=50, return_sequences=True))
-        # model.add(Dropout(0.20))
-        # # LSTM layer 3
-        # model.add(LSTM(units=50, return_sequences=True))
-        # model.add(Dropout(0.20))
-        # # LSTM layer 4
-        # model.add(LSTM(units=50, return_sequences=True))
-        # model.add(Dropout(0.20))
-        # # LSTM layer 5
-        # model.add(LSTM(units=50, return_sequences=True))
-        # model.add(Dropout(0.20))
-        # # LSTM layer 6
-        # model.add(LSTM(units=50, return_sequences=True))
-        # model.add(Dropout(0.20))
-        # # LSTM layer 7
         # model.add(LSTM(units=50))
-        # model.add(Dropout(0.20))
-        # # final layer
         # model.add(Dense(1))
-        # model.summary()
-        #
         # model.compile(loss='mean_squared_error', optimizer='adam')
         # model.fit(x_train, y_train, epochs=10, batch_size=32, verbose=2)
+
+
+        # Initialize model
+        model = Sequential()
+        model.add(Input(shape=(n_lookback, 1)))
+        # LSTM layer 1
+        model.add(LSTM(units=50, return_sequences=True))
+        model.add(Dropout(0.20))
+        # LSTM layer 2
+        model.add(LSTM(units=50, return_sequences=True))
+        model.add(Dropout(0.20))
+        # LSTM layer 3
+        model.add(LSTM(units=50, return_sequences=True))
+        model.add(Dropout(0.20))
+        # LSTM layer 4
+        model.add(LSTM(units=50, return_sequences=True))
+        model.add(Dropout(0.20))
+        # LSTM layer 5
+        model.add(LSTM(units=50, return_sequences=True))
+        model.add(Dropout(0.20))
+        # LSTM layer 6
+        model.add(LSTM(units=50, return_sequences=True))
+        model.add(Dropout(0.20))
+        # LSTM layer 7
+        model.add(LSTM(units=50))
+        model.add(Dropout(0.20))
+        # final layer
+        model.add(Dense(1))
+        model.summary()
+
+        model.compile(loss='mean_squared_error', optimizer='adam')
+        model.fit(x_train, y_train, epochs=100, batch_size=32, verbose=2)
 
 
         # Generates predictions on test set using last training data
         # x_pred = scaled_train[-n_lookback - n_forecast:-n_forecast] # Gets enough data to predict last window of training data
         # x_pred = scaled_train[-n_lookback:] # Gets enough data to predict last window of training data
+        # Recursive prediction
+
         y_pred_list = []
         for num_pred in range(n_forecast):
             new_window = pd.concat([self.price_df.iloc[-n_lookback - n_forecast + num_pred:-n_forecast]['Price'], pd.Series(y_pred_list[-min(num_pred,n_lookback):])], ignore_index=True)
             new_window = new_window.to_numpy().reshape(-1, 1)
-            print(f"Old length: {len(self.price_df.iloc[-n_lookback - n_forecast + num_pred:-n_forecast]['Price'])}")
-            print(f"New length: {len(pd.Series(y_pred_list[-num_pred:]))}")
             x_pred = scaler.transform(pd.DataFrame(new_window))
             y_pred_list.append(scaler.inverse_transform(model.predict(x_pred.reshape(1, n_lookback, 1))).flatten()[0])
         y_pred_df = pd.DataFrame(y_pred_list, columns=['Price'])
@@ -162,7 +161,7 @@ class Forecaster:
         plt.show()
 
 
-    def run_LSTM(self, n_lookback = 60, n_forecast = 29):
+    def run_LSTM(self, n_lookback = 60, n_forecast = 53):
 
         # Splits data into test and training set
         train_data = self.price_df.iloc[:-n_forecast]
@@ -249,13 +248,14 @@ class Forecaster:
         # x_pred = scaled_train[-n_lookback - n_forecast:-n_forecast] # Gets enough data to predict last window of training data
         # x_pred = scaled_train[-n_lookback:] # Gets enough data to predict last window of training data
         # x_pred = scaler.transform(self.price_df.iloc[-n_lookback - n_forecast:-n_forecast])
-        x_pred = scaler.transform(train_data[-n_lookback:])
+        # x_pred = scaler.transform(train_data[-n_lookback:])
+        x_pred_seq = scaled_train[-n_lookback:].reshape(1, n_lookback, 1)
         print("Trying to predict with")
-        print(x_pred)
-        y_pred = scaler.inverse_transform(model.predict(x_pred.reshape(1, n_lookback, 1))).flatten()
+        print(x_pred_seq)
+        y_pred = scaler.inverse_transform(model.predict(x_pred_seq.reshape(1, n_lookback, 1))).flatten()
         y_pred_df = pd.DataFrame(y_pred, columns=['Price'])
         print("RAW")
-        print(model.predict(x_pred.reshape(1, n_lookback, 1)))
+        print(model.predict(x_pred_seq.reshape(1, n_lookback, 1)))
         print("y_pred_df")
         print(y_pred_df)
 

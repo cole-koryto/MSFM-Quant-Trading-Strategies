@@ -81,11 +81,11 @@ class PriceLoader:
             batch_num += 1
         print(f"total_batches: {batch_num}")
         snp_dfs = pd.concat(snp_dfs, axis=1)
+        print(snp_dfs)
 
         # send dataframe to respective parquets
         for ticker in self.tickers:
 
-            print(snp_dfs.columns)
             # ensure that there is in fact data for ticker
             if ticker in snp_dfs.columns:
 
