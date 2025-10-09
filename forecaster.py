@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 from matplotlib import pyplot as plt
 from pyarrow.compute import scalar
+from sklearn.model_selection import GridSearchCV, TimeSeriesSplit
 from xgboost import XGBRegressor
 from sklearn.metrics import mean_squared_error, mean_absolute_error
 from tensorflow.keras.layers import Dense, LSTM, Input, Dropout
@@ -24,11 +25,13 @@ class Forecaster:
         # TODO temp
         # self.train_data = price_df.loc[:]
 
-    def run_LSTMv2(self, n_lookback = 30, n_forecast = 53):
+    def run_LSTMv2(self, n_lookback = 10, n_forecast = 10):
 
         # Splits data into test and training set
-        train_data = self.price_df[["Price"]].iloc[:-n_forecast].dropna()
-        test_data = self.price_df[["Price"]].iloc[-n_forecast:].dropna()
+        # train_data = self.price_df[["Price"]].iloc[:-n_forecast].dropna()
+        # test_data = self.price_df[["Price"]].iloc[-n_forecast:].dropna()
+        train_data = self.price_df[["return"]].iloc[:-n_forecast].dropna()
+        test_data = self.price_df[["return"]].iloc[-n_forecast:].dropna()
         print("Training")
         print(train_data)
         print("Testing")
@@ -59,7 +62,7 @@ class Forecaster:
         model.add(Dense(1))
         model.compile(loss='mean_squared_error', optimizer='adam')
         model.summary()
-        model.fit(x_train, y_train, epochs=100, batch_size=32, shuffle=False, verbose=2)
+        model.fit(x_train, y_train, epochs=10, batch_size=32, shuffle=False, verbose=2)
 
 
         # # Initialize model
@@ -121,6 +124,7 @@ class Forecaster:
 
         # Convert predictions to original scale
         y_pred_rescaled = scaler.inverse_transform(np.array(predictions).reshape(-1, 1)).flatten()
+        print(y_pred_rescaled)
 
         # Ensure test_data is an array
         true_values = np.array(test_data[:len(predictions)])  # in case predictions < test_data length
@@ -128,7 +132,7 @@ class Forecaster:
         # plot all the series together
         # TODO I do not think these lines are connecting properly
         plt.figure(figsize=(10, 5), dpi=100)
-        plt.plot(train_data.index, train_data['Price'], label='Training data')
+        plt.plot(train_data.index, train_data['return'], label='Training data')
         plt.plot(test_data, color='blue', label='Actual Stock Price')
         plt.plot(test_data.index, y_pred_rescaled, color='orange', label='Predicted Stock Price')
 
@@ -367,7 +371,7 @@ class Forecaster:
 
     def run_XGBoost(self):
         # Parameters
-        n_forecast = 10  # number of days into the future to predict
+        n_forecast = 53  # number of days into the future to predict
         lags = 30  # number of lag days to use as features
 
         # Load stock data
@@ -375,9 +379,9 @@ class Forecaster:
 
         # Create features and target
         for i in range(1, lags + 1):
-            df[f'lag_{i}'] = df['Price'].shift(i)
+            df[f'lag_{i}'] = df['return'].shift(i)
 
-        df[f'target_{n_forecast}d'] = df['Price'].shift(-n_forecast)
+        df[f'target_{n_forecast}d'] = df['return'].shift(-n_forecast)
         df.dropna(inplace=True)
 
         # Features and labels
@@ -430,10 +434,10 @@ class Forecaster:
 
         # Create lag features
         for i in range(1, lags + 1):
-            df[f'lag_{i}'] = df['Price'].shift(i)
+            df[f'lag_{i}'] = df['return'].shift(i)
 
         # One-day ahead target
-        df['target_1d'] = df['Price'].shift(-1)
+        df['target_1d'] = df['return'].shift(-1)
         df.dropna(inplace=True)
 
         # Features and target
@@ -450,11 +454,20 @@ class Forecaster:
         # We'll start forecasting from this point
         last_known_row = x_train.iloc[-1].tolist()
 
+        # Create a TimeSeriesSplit object for time series cross-validation
+        tscv = TimeSeriesSplit(n_splits=5)
 
         # Train the model
-        model = XGBRegressor(objective='reg:squarederror', n_estimators=100)
-        model.fit(x_train, y_train)
-
+        parameters = [{"tree_method": ["approx"],
+                        "max_depth": [3, 5],
+                        "min_child_weight": [25, 50, 100, 250],
+                        "subsample": [0.1, 0.5, 1],
+                        "reg_lambda": [0.001, 0.01],
+                        "learning_rate": [0.001]}]
+        grid_search = GridSearchCV(XGBRegressor(), parameters, cv=tscv, verbose=2, n_jobs=-1)
+        grid_search.fit(x_train, y_train)
+        model = grid_search.best_estimator_
+        print(f"Best Hyperparameters: {grid_search.best_params_}")
 
         # Predict next `forecast_horizon` days, one at a time
         y_pred = []
