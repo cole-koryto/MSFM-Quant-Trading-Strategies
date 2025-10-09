@@ -27,8 +27,8 @@ class Forecaster:
     def run_LSTMv2(self, n_lookback = 30, n_forecast = 53):
 
         # Splits data into test and training set
-        train_data = self.price_df[["Price"]].iloc[:-n_forecast].dropna()
-        test_data = self.price_df[["Price"]].iloc[-n_forecast:].dropna()
+        train_data = self.price_df[["return"]].iloc[:-n_forecast].dropna()
+        test_data = self.price_df[["return"]].iloc[-n_forecast:].dropna()
         print("Training")
         print(train_data)
         print("Testing")
@@ -59,7 +59,7 @@ class Forecaster:
         model.add(Dense(1))
         model.compile(loss='mean_squared_error', optimizer='adam')
         model.summary()
-        model.fit(x_train, y_train, epochs=100, batch_size=32, shuffle=False, verbose=2)
+        model.fit(x_train, y_train, epochs=10, batch_size=32, shuffle=False, verbose=2)
 
 
         # # Initialize model
@@ -125,10 +125,21 @@ class Forecaster:
         # Ensure test_data is an array
         true_values = np.array(test_data[:len(predictions)])  # in case predictions < test_data length
 
+        # Report performance
+        print(y_pred_rescaled)
+        mse = mean_squared_error(true_values, y_pred_rescaled)
+        print('MSE: ' + str(mse))
+        mae = mean_absolute_error(true_values, y_pred_rescaled)
+        print('MAE: ' + str(mae))
+        rmse = math.sqrt(mean_squared_error(true_values, y_pred_rescaled))
+        print('RMSE: ' + str(rmse))
+        mape = np.mean(np.abs(y_pred_rescaled - true_values) / np.abs(true_values))
+        print('MAPE: ' + str(mape))
+
         # plot all the series together
         # TODO I do not think these lines are connecting properly
         plt.figure(figsize=(10, 5), dpi=100)
-        plt.plot(train_data.index, train_data['Price'], label='Training data')
+        plt.plot(train_data.index[-30:], train_data.iloc[-30:]['return'], label='Training data')
         plt.plot(test_data, color='blue', label='Actual Stock Price')
         plt.plot(test_data.index, y_pred_rescaled, color='orange', label='Predicted Stock Price')
 
@@ -430,10 +441,10 @@ class Forecaster:
 
         # Create lag features
         for i in range(1, lags + 1):
-            df[f'lag_{i}'] = df['Price'].shift(i)
+            df[f'lag_{i}'] = df['return'].shift(i)
 
         # One-day ahead target
-        df['target_1d'] = df['Price'].shift(-1)
+        df['target_1d'] = df['return'].shift(-1)
         df.dropna(inplace=True)
 
         # Features and target
@@ -478,7 +489,7 @@ class Forecaster:
 
         # Plot actual vs predicted
         plt.figure(figsize=(12, 6))
-        plt.plot(df.index[:-n_forecast], y_train, label='Training Actual')
+        plt.plot(df.index[-n_forecast-30:-n_forecast], y_train[-30:], label='Training Actual')
         plt.plot(df.index[-n_forecast:], y_test, label='Testing Actual')
         plt.plot(df.index[-n_forecast:], y_pred, label='Predicted')
         plt.title(f'{n_forecast}-Day Ahead Stock Price Prediction')
