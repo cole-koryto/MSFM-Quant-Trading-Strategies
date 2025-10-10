@@ -450,8 +450,14 @@ class Forecaster:
         df['target_1d'] = df['return'].shift(-1)
         df.dropna(inplace=True)
 
+        # Add 2-day, 3-day, and 5-day moving averages
+        df['MA_2'] = df['return'].rolling(window=2).mean()
+        df['MA_3'] = df['return'].rolling(window=3).mean()
+        df['MA_5'] = df['return'].rolling(window=5).mean()
+
         # Features and target
         features = [f'lag_{i}' for i in range(1, lags + 1)]
+        features.extend(['MA_2', 'MA_3', 'MA_5'])
         x = df[features]
         y = df['target_1d']
 
