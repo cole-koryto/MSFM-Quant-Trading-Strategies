@@ -79,7 +79,6 @@ class PriceLoader:
             batch_num += 1
         print(f"total_batches: {batch_num}")
         snp_dfs = pd.concat(snp_dfs, axis=1)
-        print(snp_dfs)
 
         # send dataframe to respective parquets
         for ticker in self.tickers:
@@ -103,5 +102,5 @@ class PriceLoader:
 
 
 if __name__ == "__main__":
-    loader = PriceLoader(["^SPX"])
+    loader = PriceLoader(["^SPX", "ES=F"])
     loader.save_to_parquet((datetime.now() - timedelta(days=5*365)).strftime("%Y-%m-%d"), datetime.now().strftime("%Y-%m-%d"))

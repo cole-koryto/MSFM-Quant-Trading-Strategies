@@ -4,8 +4,14 @@ import pandas as pd
 import numpy as np
 from matplotlib import pyplot as plt
 from pyarrow.compute import scalar
-from sklearn.model_selection import GridSearchCV, TimeSeriesSplit
-from xgboost import XGBRegressor
+from sklearn.model_selection import GridSearchCV, TimeSeriesSplit, RandomizedSearchCV
+from sklearn.metrics import (
+    accuracy_score,
+    classification_report,
+    confusion_matrix,
+    ConfusionMatrixDisplay
+)
+from xgboost import XGBRegressor, XGBClassifier
 from sklearn.metrics import mean_squared_error, mean_absolute_error
 from tensorflow.keras.layers import Dense, LSTM, Input, Dropout
 from tensorflow.keras.models import Sequential
@@ -15,7 +21,7 @@ class Forecaster:
 
     def __init__(self):
         print("Loading data...")
-        self.price_df = pd.read_parquet("./data/^SPX.parquet")
+        self.price_df = pd.read_parquet("./data/ES=F.parquet")
         self.price_df["return"] = self.price_df["Price"].pct_change()
         print("Data loading complete")
         start_test_date = "2025-01-01"
@@ -437,27 +443,37 @@ class Forecaster:
 
     def run_XGBoostv2(self):
         # Parameters
-        n_forecast = 53  # how many days ahead we want to forecast iteratively
-        lags = 30  # how many past days to use as input
+        n_forecast = 180  # how many days ahead we want to forecast iteratively
+        lags = 30 # how many past days to use as input
 
+        # Creates modeling df
         df = self.price_df.copy()
+
+        # Creates return quantiles
+        df['quantile'] = pd.qcut(df['return'], q=5, labels=False)
+        print(f"Quantile portions:\n{df['quantile'].value_counts(normalize=True).sort_index()}")
 
         # Create lag features
         for i in range(1, lags + 1):
-            df[f'lag_{i}'] = df['return'].shift(i)
+            df[f'lag_{i}'] = df['quantile'].shift(i)
 
         # One-day ahead target
-        df['target_1d'] = df['return'].shift(-1)
+        df['target_1d'] = df['quantile'].shift(-1)
         df.dropna(inplace=True)
 
-        # Add 2-day, 3-day, and 5-day moving averages
-        df['MA_2'] = df['return'].rolling(window=2).mean()
-        df['MA_3'] = df['return'].rolling(window=3).mean()
-        df['MA_5'] = df['return'].rolling(window=5).mean()
+        # Add 2-day, 3-day, and 5-day moving averages for return
+        # df['MA_2_r'] = df['return'].rolling(window=2).mean()
+        # df['MA_3_r'] = df['return'].rolling(window=3).mean()
+        # df['MA_5_r'] = df['return'].rolling(window=5).mean()
+
+        # Add 2-day, 3-day, and 5-day moving averages for return quintiles
+        df['MA_2_q'] = df['quantile'].rolling(window=2).mean()
+        df['MA_3_q'] = df['quantile'].rolling(window=3).mean()
+        df['MA_5_q'] = df['quantile'].rolling(window=5).mean()
 
         # Features and target
         features = [f'lag_{i}' for i in range(1, lags + 1)]
-        features.extend(['MA_2', 'MA_3', 'MA_5'])
+        features.extend(['MA_2_q', 'MA_3_q', 'MA_5_q'])
         x = df[features]
         y = df['target_1d']
 
@@ -467,43 +483,56 @@ class Forecaster:
         y_train = y[:-n_forecast]
         y_test = y[-n_forecast:]
 
-        # We'll start forecasting from this point
-        last_known_row = x_train.iloc[-1].tolist()
-
         # Create a TimeSeriesSplit object for time series cross-validation
         tscv = TimeSeriesSplit(n_splits=5)
 
         # Train the model
-        parameters = [{"tree_method": ["approx"],
-                        "max_depth": [3, 5],
-                        "min_child_weight": [25, 50, 100, 250],
-                        "subsample": [0.1, 0.5, 1],
-                        "reg_lambda": [0.001, 0.01],
-                        "learning_rate": [0.001]}]
-        grid_search = GridSearchCV(XGBRegressor(), parameters, cv=tscv, verbose=2, n_jobs=-1)
+        param_grid = {
+            "n_estimators": [200, 300],
+            "max_depth": [5, 6],
+            "learning_rate": [0.05, 0.1],
+            "subsample": [0.4, 0.5],
+            "colsample_bytree": [0.8],
+            "min_child_weight": [5, 10],
+            "gamma": [0.1, 0.2],
+            "reg_lambda": [10, 15],
+        }
+        xgb = XGBClassifier(
+            objective='multi:softprob', # provides actual class probabilities
+            num_class=5,
+            tree_method='hist',         # faster than approx
+            eval_metric='mlogloss',     # good for multi-class
+            random_state=25,
+            n_jobs=-1
+        )
+        grid_search = GridSearchCV(
+            estimator=xgb,
+            param_grid=param_grid,
+            cv=tscv,
+            scoring='accuracy',     # could also do neg_log_loss if we focus on probability calibration
+            verbose=2,
+            n_jobs=-1)
         grid_search.fit(x_train, y_train)
         model = grid_search.best_estimator_
         print(f"Best Hyperparameters: {grid_search.best_params_}")
 
-        # Predict next `forecast_horizon` days, one at a time
-        y_pred = []
-        current_input = last_known_row.copy()
-        for _ in range(n_forecast):
-            pred = model.predict(np.array(current_input).reshape(1, -1))[0]
-            y_pred.append(pred)
+        # Predict on test set
+        y_pred = model.predict(x_test)
 
-            # Update input: remove oldest lag, append new prediction
-            current_input = current_input[1:] + [pred]
+        # Accuracy
+        acc = accuracy_score(y_test, y_pred)
+        print(f"Accuracy: {acc:.3f}")
 
-        # Report performance
-        mse = mean_squared_error(y_test, y_pred)
-        print('MSE: ' + str(mse))
-        mae = mean_absolute_error(y_test, y_pred)
-        print('MAE: ' + str(mae))
-        rmse = math.sqrt(mean_squared_error(y_test, y_pred))
-        print('RMSE: ' + str(rmse))
-        mape = np.mean(np.abs(y_pred - y_test) / np.abs(y_test))
-        print('MAPE: ' + str(mape))
+        # Detailed classification report
+        print("\nClassification Report:")
+        print(classification_report(y_test, y_pred, digits=3))
+
+        # Confusion matrix
+        cm = confusion_matrix(y_test, y_pred)
+        disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=[1, 2, 3, 4, 5])
+        disp.plot(cmap="Blues")
+        plt.title("Confusion Matrix (Quantile Classifier)")
+        plt.show()
 
         # Plot actual vs predicted
         plt.figure(figsize=(12, 6))
