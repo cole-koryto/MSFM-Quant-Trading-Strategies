@@ -15,6 +15,7 @@ from xgboost import XGBRegressor, XGBClassifier
 from sklearn.metrics import mean_squared_error, mean_absolute_error
 from tensorflow.keras.layers import Dense, LSTM, Input, Dropout
 from tensorflow.keras.models import Sequential
+from tensorflow.keras.utils import to_categorical
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
 class Forecaster:
@@ -31,207 +32,156 @@ class Forecaster:
         # TODO temp
         # self.train_data = price_df.loc[:]
 
-    def run_LSTMv2(self, n_lookback = 30, n_forecast = 53):
+    def run_LSTMv2(self):
+        lags = 30  # number of lag features
+        n_classes = 5  # number of quantiles
+        n_forecast = 180
 
-        # Splits data into test and training set
-        # train_data = self.price_df[["Price"]].iloc[:-n_forecast].dropna()
-        # test_data = self.price_df[["Price"]].iloc[-n_forecast:].dropna()
-        train_data = self.price_df[["return"]].iloc[:-n_forecast].dropna()
-        test_data = self.price_df[["return"]].iloc[-n_forecast:].dropna()
-        print("Training")
-        print(train_data)
-        print("Testing")
-        print(test_data)
+        df = self.price_df.copy()
 
-        # Scales the data using Min Max
+        # Create return quantiles
+        df['quantile'] = pd.qcut(df['return'], q=n_classes, labels=False)
+
+        # One-day ahead target
+        df['target_1d'] = df['quantile'].shift(-1)
+
+        # Create lag features for quantiles
+        for i in range(1, lags + 1):
+            df[f'lag_{i}'] = df['quantile'].shift(i)
+
+        # Drop NaNs created by shifting
+        df.dropna(inplace=True)
+
+        # Features and target
+        features = [f'lag_{i}' for i in range(1, lags + 1)]
+        x = df[features].values
+        y = df['target_1d'].values.astype(int)
+
+        # -----------------------------
+        # Train/Test Split
+        # -----------------------------
+        x_train = x[:-n_forecast]
+        x_test = x[-n_forecast:]
+        y_train = y[:-n_forecast]
+        y_test = y[-n_forecast:]
+
+        # -----------------------------
+        # Scale features
+        # -----------------------------
         scaler = MinMaxScaler(feature_range=(0, 1))
-        scaler = scaler.fit(train_data)
-        scaled_train = scaler.transform(train_data)
+        x_train_scaled = scaler.fit_transform(x_train)
+        x_test_scaled = scaler.transform(x_test)
 
-        # Generates inputs and outputs based on lookback and forcasting periods
+        # Reshape for LSTM: (samples, timesteps=lags, features=1)
+        x_train_lstm = x_train_scaled.reshape((x_train_scaled.shape[0], lags, 1))
+        x_test_lstm = x_test_scaled.reshape((x_test_scaled.shape[0], lags, 1))
 
-        x_train = []
-        y_train = []
-        for i in range(n_lookback, len(scaled_train) - n_forecast + 1):
-            x_train.append(scaled_train[i - n_lookback: i])
-            y_train.append(scaled_train[i, 0])
+        # One-hot encode targets
+        y_train_cat = to_categorical(y_train, num_classes=n_classes)
+        y_test_cat = to_categorical(y_test, num_classes=n_classes)
 
-        # Convert lists to numpy arrays so that Input layer works
-        x_train = np.array(x_train)
-        y_train = np.array(y_train)
-
-        # Creates LSTM model
+        # -----------------------------
+        # Build LSTM Model
+        # -----------------------------
         model = Sequential()
-        model.add(Input(shape=(n_lookback, 1)))
-        model.add(LSTM(units=50, return_sequences=True))
+        model.add(Input(shape=(lags, 1)))
         model.add(LSTM(units=50))
-        model.add(Dense(1))
-        model.compile(loss='mean_squared_error', optimizer='adam')
-        model.summary()
-        model.fit(x_train, y_train, epochs=10, batch_size=32, shuffle=False, verbose=2)
+        model.add(Dense(n_classes, activation='softmax'))
 
+        """"
+        Accuracy: 0.217
 
-        # # Initialize model
+Classification Report:
+              precision    recall  f1-score   support
+
+           0      0.214     0.176     0.194        34
+           1      0.109     0.132     0.119        38
+           2      0.259     0.429     0.323        35
+           3      0.263     0.128     0.172        39
+           4      0.276     0.235     0.254        34
+
+    accuracy                          0.217       180
+   macro avg      0.224     0.220     0.212       180
+weighted avg      0.223     0.217     0.210       180
+        """
+
         # model = Sequential()
-        # model.add(Input(shape=(n_lookback, 1)))
-        # # LSTM layer 1
-        # model.add(LSTM(units=50, return_sequences=True))
-        # model.add(Dropout(0.20))
-        # # LSTM layer 2
-        # model.add(LSTM(units=50, return_sequences=True))
-        # model.add(Dropout(0.20))
-        # # LSTM layer 3
-        # model.add(LSTM(units=50, return_sequences=True))
-        # model.add(Dropout(0.20))
-        # # LSTM layer 4
-        # model.add(LSTM(units=50, return_sequences=True))
-        # model.add(Dropout(0.20))
-        # # LSTM layer 5
-        # model.add(LSTM(units=50, return_sequences=True))
-        # model.add(Dropout(0.20))
-        # # LSTM layer 6
-        # model.add(LSTM(units=50, return_sequences=True))
-        # model.add(Dropout(0.20))
-        # # LSTM layer 7
-        # model.add(LSTM(units=50))
-        # model.add(Dropout(0.20))
-        # # final layer
-        # model.add(Dense(1))
-        # model.summary()
-        #
-        # model.compile(loss='mean_squared_error', optimizer='adam')
-        # model.fit(x_train, y_train, epochs=10, batch_size=32, shuffle=False, verbose=2)
+        # model.add(Input(shape=(lags, 1)))
+        # model.add(LSTM(50, return_sequences=True))
+        # model.add(Dropout(0.2))  # 20% dropout
+        # model.add(LSTM(25))
+        # model.add(Dropout(0.2))
+        # model.add(Dense(n_classes, activation='softmax'))
+        """
+        ccuracy: 0.256
 
+Classification Report:
+              precision    recall  f1-score   support
 
-        # Generates predictions on test set using last training data
-        # x_pred = scaled_train[-n_lookback - n_forecast:-n_forecast] # Gets enough data to predict last window of training data
-        # x_pred = scaled_train[-n_lookback:] # Gets enough data to predict last window of training data
-        # Prepare input: last `n_lookback` points from train_data
-        lookback = train_data[-n_lookback:].copy()  # Series or array
+           0      0.244     0.294     0.267        34
+           1      0.238     0.132     0.169        38
+           2      0.262     0.629     0.370        35
+           3      0.400     0.051     0.091        39
+           4      0.241     0.206     0.222        34
 
-        # Scale initial input
-        input_seq = scaler.transform(np.array(lookback).reshape(-1, 1))  # shape: (n_lookback, 1)
+    accuracy                          0.256       180
+   macro avg      0.277     0.262     0.224       180
+weighted avg      0.280     0.256     0.220       180
+        """
 
-        # Initialize prediction list
-        predictions = []
+        model.compile(
+            loss='categorical_crossentropy',
+            optimizer='adam',
+            metrics=['accuracy']
+        )
+        model.summary()
 
-        for _ in range(n_forecast):
-            # Reshape input for LSTM: (1 sample, n_lookback steps, 1 feature)
-            x_input = input_seq.reshape(1, n_lookback, 1)
+        # -----------------------------
+        # Train Model
+        # -----------------------------
+        model.fit(
+            x_train_lstm,
+            y_train_cat,
+            epochs=100,
+            batch_size=32,
+            shuffle=False,
+            verbose=2
+        )
 
-            # Predict next return
-            y_pred = model.predict(x_input, verbose=0)[0][0]  # extract scalar
+        # -----------------------------
+        # Predict on Test Set
+        # -----------------------------
+        y_pred_prob = model.predict(x_test_lstm)
+        y_pred_class = np.argmax(y_pred_prob, axis=1)
+        print(y_pred_prob)
+        print(y_pred_class)
+        print(y_test)
 
-            # Append prediction to list
-            predictions.append(y_pred)
+        # Accuracy
+        acc = accuracy_score(y_test, y_pred_class)
+        print(f"Accuracy: {acc:.3f}")
 
-            # Update input_seq: remove first row, append prediction (as a row)
-            input_seq = np.append(input_seq[1:], [[y_pred]], axis=0)
+        # Detailed classification report
+        print("\nClassification Report:")
+        print(classification_report(y_test, y_pred_class, digits=3))
 
-        # Convert predictions to original scale
-        y_pred_rescaled = scaler.inverse_transform(np.array(predictions).reshape(-1, 1)).flatten()
-
-        # Ensure test_data is an array
-        true_values = np.array(test_data[:len(predictions)])  # in case predictions < test_data length
-
-        # Report performance
-        print(y_pred_rescaled)
-        mse = mean_squared_error(true_values, y_pred_rescaled)
-        print('MSE: ' + str(mse))
-        mae = mean_absolute_error(true_values, y_pred_rescaled)
-        print('MAE: ' + str(mae))
-        rmse = math.sqrt(mean_squared_error(true_values, y_pred_rescaled))
-        print('RMSE: ' + str(rmse))
-        mape = np.mean(np.abs(y_pred_rescaled - true_values) / np.abs(true_values))
-        print('MAPE: ' + str(mape))
-
-        # plot all the series together
-        # TODO I do not think these lines are connecting properly
-        plt.figure(figsize=(10, 5), dpi=100)
-        plt.plot(train_data.index[-30:], train_data.iloc[-30:]['return'], label='Training data')
-        plt.plot(test_data, color='blue', label='Actual Stock Price')
-        plt.plot(test_data.index, y_pred_rescaled, color='orange', label='Predicted Stock Price')
-
-        plt.title('SPX Price Prediction')
-        plt.xlabel('Time')
-        plt.ylabel('SPX Price')
-        plt.legend(loc='upper left', fontsize=8)
+        # Confusion matrix
+        cm = confusion_matrix(y_test, y_pred_class)
+        disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=[0, 1, 2, 3, 4])
+        disp.plot(cmap="Blues")
+        plt.title("Confusion Matrix (Quantile Classifier)")
         plt.show()
 
-        return
-
-        y_pred_list = []
-        current_input = x_train[-1]
-        print("Now predicting")
-        print(current_input)
-        for num_pred in range(n_forecast):
-            pred = model.predict(current_input)
-            print(pred)
-            y_pred_list.append(scaler.inverse_transform(pred))
-            print(y_pred_list)
-
-            current_input = current_input[1:] + [pred]
-
-
-            # new_window = pd.concat([scaled_train[-n_lookback - n_forecast:], pd.Series(y_pred_list[-min(num_pred,n_lookback):])], ignore_index=True)
-            # new_window = new_window.to_numpy().reshape(-1, 1)
-            # x_pred = scaler.transform(pd.DataFrame(new_window))
-            # y_pred_list.append(scaler.inverse_transform(model.predict(x_pred.reshape(1, n_lookback, 1))).flatten()[0])
-        y_pred_df = pd.DataFrame(y_pred_list, columns=['Price'])
-        print("y_pred_df")
-        print(y_pred_df)
-
-
-        # plot all the series together
-        #TODO I do not think these lines are connecting properly
-        plt.figure(figsize=(10, 5), dpi=100)
-        plt.plot(train_data.index, train_data['Price'], label='Training data')
-        plt.plot(test_data, color='blue', label='Actual Stock Price')
-        plt.plot(test_data.index, y_pred_df['Price'], color='orange', label='Predicted Stock Price')
-
-        plt.title('SPX Price Prediction')
-        plt.xlabel('Time')
-        plt.ylabel('SPX Price')
-        plt.legend(loc='upper left', fontsize=8)
-        plt.show()
-
-        #report performance
-        mse = mean_squared_error(test_data['Price'], y_pred_df['Price'])
-        print('MSE: ' + str(mse))
-        mae = mean_absolute_error(test_data['Price'], y_pred_df['Price'])
-        print('MAE: ' + str(mae))
-        rmse = math.sqrt(mean_squared_error(test_data['Price'], y_pred_df['Price']))
-        print('RMSE: ' + str(rmse))
-        mape = np.mean(np.abs(y_pred_df['Price'] - test_data['Price']) / np.abs(test_data['Price']))
-        print('MAPE: ' + str(mape))
-
-        # plt.figure(figsize=(12, 6))
-        # plt.plot(self.train_data.loc[self.train_data.index <= '2020-11-18']['Price'], 'b', label="Original Price")
-        # plt.plot(self.train_data.loc[self.train_data.index <= '2020-11-18'].index, y_pred, 'r', label="Predicted Price")
-        # plt.xlabel('Time')
-        # plt.ylabel('Price')
-        # plt.legend()
-        # plt.grid(True)
-        # plt.show()
-
-        # Organize the results in a dataframe for printing
-        df_past = pd.DataFrame(train_data)
-        df_past.rename(columns={'Price': 'Actual'}, inplace=True)
-        df_past['Forecast'] = np.nan
-        df_past['Forecast'].iloc[-1] = df_past['Actual'].iloc[-1] # Ensures data is connected
-        print(df_past)
-
-        df_future = pd.DataFrame(columns=['Actual', 'Forecast'])
-        df_future['Forecast'] = y_pred_df['Price']
-        df_future['Actual'] = np.nan
-        df_future.index = pd.date_range(start=df_past.index[-1] + pd.Timedelta(days=1), periods=n_forecast)  # set index
-        print(df_future)
-
-        results = pd.concat([df_past, df_future])
-        print(results)
-
-        # plot the results
-        results.plot(title='SPX Forecast')
+        # Plot actual vs predicted
+        plt.figure(figsize=(12, 6))
+        plt.plot(df.index[-n_forecast - 30:-n_forecast], y_train[-30:], label='Training Actual')
+        plt.plot(df.index[-n_forecast:], y_test, label='Testing Actual')
+        plt.plot(df.index[-n_forecast:], y_pred_class, label='Predicted')
+        plt.title(f'{n_forecast}-Day Ahead Stock Return Quantile Prediction')
+        plt.xlabel('Date')
+        plt.ylabel('Quantiles')
+        plt.legend()
+        plt.grid(True)
         plt.show()
 
 
@@ -513,11 +463,28 @@ class Forecaster:
             verbose=2,
             n_jobs=-1)
         grid_search.fit(x_train, y_train)
+        """
+        Accuracy: 0.228
+
+Classification Report:
+              precision    recall  f1-score   support
+
+         0.0      0.258     0.235     0.246        34
+         1.0      0.206     0.184     0.194        38
+         2.0      0.283     0.371     0.321        35
+         3.0      0.147     0.128     0.137        39
+         4.0      0.229     0.235     0.232        34
+
+    accuracy                          0.228       180
+   macro avg      0.224     0.231     0.226       180
+weighted avg      0.222     0.228     0.223       180
+        """
         model = grid_search.best_estimator_
         print(f"Best Hyperparameters: {grid_search.best_params_}")
 
         # Predict on test set
         y_pred = model.predict(x_test)
+        print(y_pred)
 
         # Accuracy
         acc = accuracy_score(y_test, y_pred)
