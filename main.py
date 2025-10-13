@@ -3,7 +3,7 @@ from forecaster import Forecaster
 
 def main():
     forecaster = Forecaster()
-    forecaster.run_LSTMv2()
+    forecaster.run_LSTM()
 
 
 if __name__ == "__main__":
