@@ -88,8 +88,12 @@ class PriceLoader:
 
                 # separate df into its own data file as parquets
                 ticker_df = snp_dfs.loc[:, [ticker]]
-                ticker_df = ticker_df.rename(columns={f"{ticker}": "Price"})
+                ticker_df = ticker_df.rename(columns={f"{ticker}": "price"})
                 ticker_df.columns.name = None
+
+                # create return column
+                ticker_df["return"] = ticker_df["price"].pct_change()
+
                 # use ticker for the name
                 ticker_df.to_parquet(f"data/{ticker}.parquet")
                 print(f"{ticker} parquet created!")

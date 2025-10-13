@@ -1,4 +1,5 @@
 import datetime
+import json
 import os
 import pandas as pd
 import numpy as np
@@ -18,23 +19,66 @@ from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
 
 class Forecaster:
-    def __init__(self):
+    def __init__(self, symbol):
         self.x_train = None
         self.x_test = None
         self.y_train = None
         self.y_test = None
+        self.__NUM_CLASSES = 5
+        self.symbol = symbol
 
         print("Loading data...")
-        self.price_df = pd.read_parquet("./data/ES=F.parquet")
-        self.price_df["return"] = self.price_df["Price"].pct_change()
-        self.__NUM_CLASSES = 5
-        self.test_data_generated = False
+        self.symbol_data_df = pd.read_parquet(f"./data/{symbol}.parquet")
+
+
+    def run_LSTM(self, lags):
+        print(f"Running LSTM prediction for {self.symbol}")
+
+        # Gathers data
+        self.generate_data(lags)
+
+        # Scale features
+        num_features = self.x_train.shape[1]
+        scaler = MinMaxScaler(feature_range=(0, 1))
+        x_train_scaled = scaler.fit_transform(self.x_train)
+
+        # Reshape for LSTM: (samples, timesteps=num_features, features=1)
+        x_train_lstm = x_train_scaled.reshape((x_train_scaled.shape[0], num_features, 1))
+
+        # One-hot encode targets
+        y_train_cat = to_categorical(self.y_train, num_classes=self.__NUM_CLASSES)
+
+        # Gets LSTM model
+        model = self.build_LSTM_model()
+
+        # Fits model
+        model.fit(
+            x_train_lstm,
+            y_train_cat,
+            epochs=100,
+            batch_size=32,
+            shuffle=False,
+            verbose=2
+        )
+
+        # Predict next day return quantile
+        x_last = x_train_lstm[-1].reshape((1, num_features, 1))
+        y_pred_prob = model.predict(x_last)
+        y_pred_class = np.argmax(y_pred_prob, axis=1)
+        print(f"Quantile Probability Predictions\n{y_pred_prob}")
+        print(f"Quantile Class Predictions\n{y_pred_class}")
+
+        # Create output DataFrame
+        prob_cols = [f"Prob_Class_{i}" for i in range(self.__NUM_CLASSES)]
+        df_out = pd.DataFrame(y_pred_prob, columns=prob_cols)
+        df_out.insert(0, "Predicted_Class", y_pred_class)
+        df_out.insert(0, "Symbol", self.symbol)
+        return df_out
 
 
     def test_LSTM(self, lags, test_size):
-        # Gathers test data if it is not already present
-        if not self.test_data_generated:
-            self.generate_test_data(lags, test_size)
+        # Gathers test data
+        self.generate_data(lags, test_size)
         num_features = self.x_train.shape[1]
 
         # Scale features
@@ -49,7 +93,26 @@ class Forecaster:
         # One-hot encode targets
         y_train_cat = to_categorical(self.y_train, num_classes=self.__NUM_CLASSES)
 
+        # Gets LSTM model
+        model = self.build_LSTM_model()
+        model.fit(
+            x_train_lstm,
+            y_train_cat,
+            epochs=100,
+            batch_size=32,
+            shuffle=False,
+            verbose=2
+        )
+
+        # Predict on Test Set
+        y_pred_prob = model.predict(x_test_lstm)
+        y_pred_class = np.argmax(y_pred_prob, axis=1)
+        self.output_test_metrics(y_pred_class, "LSTM")
+
+
+    def build_LSTM_model(self):
         # Build LSTM Model
+        num_features = self.x_train.shape[1]
         model = Sequential()
         model.add(Input(shape=(num_features, 1)))
         model.add(LSTM(units=50))
@@ -69,26 +132,58 @@ class Forecaster:
             optimizer='adam',
             metrics=['accuracy']
         )
-        model.fit(
-            x_train_lstm,
-            y_train_cat,
-            epochs=100,
-            batch_size=32,
-            shuffle=False,
-            verbose=2
+        return model
+
+
+    def run_XGBoost(self):
+        # Load best params
+        with open("testing_results/xgb_best_params.json", "r") as f:
+            best_params = json.load(f)
+
+        # Build model with best params
+        model = XGBClassifier(
+            use_label_encoder=False,
+            eval_metric='mlogloss',
+            **best_params
         )
 
-        # Predict on Test Set
-        y_pred_prob = model.predict(x_test_lstm)
-        y_pred_class = np.argmax(y_pred_prob, axis=1)
-        self.output_test_metrics(y_pred_class, "LSTM")
+        # Train on full data
+        model.fit(self.x_train, self.y_train)
+
+        # Predict next day
+        y_pred = model.predict(self.x_train[-1])
+        print(f"Quantile Class Predictions\n{y_pred}")
+
+        # Create output DataFrame
+        prob_cols = [f"Prob_Class_{i}" for i in range(self.__NUM_CLASSES)]
+        df_out = pd.DataFrame([None for _ in range(self.__NUM_CLASSES)], columns=prob_cols)
+        df_out.insert(0, "Predicted_Class", y_pred)
+        df_out.insert(0, "Symbol", self.symbol)
+        return df_out
 
 
     def test_XGBoost(self, lags, test_size):
-        # Gathers test data if it is not already present
-        if not self.test_data_generated:
-            self.generate_test_data(lags, test_size)
+        # Gathers test data
+        self.generate_data(lags, test_size)
 
+        # Gets grid_search model
+        grid_search = self.build_XGBoost()
+
+        # Trains model
+        grid_search.fit(self.x_train, self.y_train)
+        model = grid_search.best_estimator_
+        print(f"Best Hyperparameters: {grid_search.best_params_}")
+
+        # Save to JSON file
+        with open("xgb_best_params.json", "w") as f:
+            json.dump(grid_search.best_params_, f, indent=4)
+
+        # Predict on test set
+        y_pred = model.predict(self.x_test)
+        self.output_test_metrics(y_pred, "XGBoost")
+
+
+    def build_XGBoost(self):
         # Create a TimeSeriesSplit object for time series cross-validation
         tscv = TimeSeriesSplit(n_splits=5)
 
@@ -104,10 +199,10 @@ class Forecaster:
             "reg_lambda": [10, 15],
         }
         xgb = XGBClassifier(
-            objective='multi:softprob', # provides actual class probabilities
+            objective='multi:softprob',  # provides actual class probabilities
             num_class=5,
-            tree_method='hist',         # faster than approx
-            eval_metric='mlogloss',     # good for multi-class
+            tree_method='hist',  # faster than approx
+            eval_metric='mlogloss',  # good for multi-class
             random_state=25,
             n_jobs=-1
         )
@@ -115,21 +210,16 @@ class Forecaster:
             estimator=xgb,
             param_grid=param_grid,
             cv=tscv,
-            scoring='accuracy',     # could also do neg_log_loss if we focus on probability calibration
+            scoring='accuracy',  # could also do neg_log_loss if we focus on probability calibration
             verbose=2,
             n_jobs=-1)
-        grid_search.fit(self.x_train, self.y_train)
-        model = grid_search.best_estimator_
-        print(f"Best Hyperparameters: {grid_search.best_params_}")
 
-        # Predict on test set
-        y_pred = model.predict(self.x_test)
-        self.output_test_metrics(y_pred, "XGBoost")
+        return grid_search
 
 
-    def generate_test_data(self, lags, test_size):
+    def generate_data(self, lags, test_size=None):
         # Creates modeling df
-        df = self.price_df.copy()
+        df = self.symbol_data_df.copy()
 
         # Creates return quantiles
         df['quantile'] = pd.qcut(df['return'], q=5, labels=False)
@@ -155,12 +245,15 @@ class Forecaster:
         x = df[features]
         y = df['target_1d']
 
-        # Train/test split
-        self.x_train = x[:-test_size]
-        self.x_test = x[-test_size:]
-        self.y_train = y[:-test_size]
-        self.y_test = y[-test_size:]
-        self.test_data_generated = True
+        # Train/test split if needed
+        if test_size:
+            self.x_train = x[:-test_size]
+            self.x_test = x[-test_size:]
+            self.y_train = y[:-test_size]
+            self.y_test = y[-test_size:]
+        else:
+            self.x_train = x
+            self.y_train = y
 
 
     def output_test_metrics(self, y_pred, model_name):
@@ -198,7 +291,7 @@ class Forecaster:
 
         # Save output to file
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        filename = os.path.join(results_folder, f"test_results_{timestamp}.txt")
+        filename = os.path.join(results_folder, f"{model_name}_test_results_{timestamp}.txt")
         with open(filename, "w") as f:
             f.write(f"{model_name} Quantile Classifier Testing Results\n")
             f.write("========================================\n\n")
@@ -210,3 +303,41 @@ class Forecaster:
             f.write(np.array2string(cm, separator=', '))
             f.write("\n")
         print(f"✅ Testing results saved to: {filename}")
+
+
+    # def save_prediction_LSTM(self, symbol, y_pred_class, y_pred_prob):
+    #     # Create folder if it doesn't exist
+    #     os.makedirs("testing_results/predictions", exist_ok=True)
+    #
+    #     # Create filename with symbol + date
+    #     today = datetime.date.today().strftime("%Y-%m-%d")
+    #     filename = f"testing_results/predictions/{symbol}_{today}.csv"
+    #
+    #     # Build a DataFrame for readability
+    #     df_pred = pd.DataFrame({
+    #         "Predicted_Class": y_pred_class,
+    #     })
+    #
+    #     # Add predicted probabilities for each class
+    #     for i in range(y_pred_prob.shape[1]):
+    #         df_pred[f"Prob_Class_{i}"] = y_pred_prob[:, i]
+    #
+    #     # Save to CSV
+    #     df_pred.to_csv(filename, index=False)
+    #     print(f"✅ Saved LSTM predictions to {filename}")
+    #
+    #
+    # def save_xgb_prediction(self, symbol, y_pred_class):
+    #     # Create folder if it doesn't exist
+    #     os.makedirs("testing_results/predictions", exist_ok=True)
+    #
+    #     # Create filename using symbol + date
+    #     today = datetime.date.today().strftime("%Y-%m-%d")
+    #     filename = f"testing_results/predictions/{symbol}_{today}.csv"
+    #
+    #     # Save only the class predictions
+    #     df_pred = pd.DataFrame({"Predicted_Class": y_pred_class})
+    #     df_pred.to_csv(filename, index=False)
+    #
+    #     print(f"✅ Saved XGBoost predictions to {filename}")
+
