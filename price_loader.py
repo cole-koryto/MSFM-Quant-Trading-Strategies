@@ -74,7 +74,7 @@ def get_biggest_losers(n=3, lookback_days=5, chunk_size=50, delay=0.2):
     # Step 1: Try to fetch dynamic tickers
     tickers = []
     try:
-        tickers = get_dynamic_tickers()
+        tickers = get_yahoo_futures_tickers()
         if tickers:
             with open(CACHE_FILE, "w") as f:
                 json.dump(tickers, f)
