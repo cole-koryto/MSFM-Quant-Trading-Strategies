@@ -1,9 +1,9 @@
 import datetime
-import math
+import json
+import os
 import pandas as pd
 import numpy as np
 from matplotlib import pyplot as plt
-from pyarrow.compute import scalar
 from sklearn.model_selection import GridSearchCV, TimeSeriesSplit, RandomizedSearchCV
 from sklearn.metrics import (
     accuracy_score,
@@ -11,134 +11,47 @@ from sklearn.metrics import (
     confusion_matrix,
     ConfusionMatrixDisplay
 )
-from xgboost import XGBRegressor, XGBClassifier
-from sklearn.metrics import mean_squared_error, mean_absolute_error
+from xgboost import XGBClassifier
 from tensorflow.keras.layers import Dense, LSTM, Input, Dropout
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.utils import to_categorical
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
+
 class Forecaster:
+    def __init__(self, symbol):
+        self.x_train = None
+        self.x_test = None
+        self.y_train = None
+        self.y_test = None
+        self.__NUM_CLASSES = 5
+        self.symbol = symbol
 
-    def __init__(self):
         print("Loading data...")
-        self.price_df = pd.read_parquet("./data/ES=F.parquet")
-        self.price_df["return"] = self.price_df["Price"].pct_change()
-        print("Data loading complete")
-        start_test_date = "2025-01-01"
-        # self.train_data = price_df.loc[:start_test_date]
-        # self.test_data = price_df.loc[start_test_date:]
+        self.symbol_data_df = pd.read_parquet(f"./data/{symbol}.parquet")
 
-        # TODO temp
-        # self.train_data = price_df.loc[:]
 
-    def run_LSTMv2(self):
-        lags = 30  # number of lag features
-        n_classes = 5  # number of quantiles
-        n_forecast = 180
+    def run_LSTM(self, lags):
+        print(f"Running LSTM prediction for {self.symbol}")
 
-        df = self.price_df.copy()
+        # Gathers data
+        self.generate_data(lags)
 
-        # Create return quantiles
-        df['quantile'] = pd.qcut(df['return'], q=n_classes, labels=False)
-
-        # One-day ahead target
-        df['target_1d'] = df['quantile'].shift(-1)
-
-        # Create lag features for quantiles
-        for i in range(1, lags + 1):
-            df[f'lag_{i}'] = df['quantile'].shift(i)
-
-        # Drop NaNs created by shifting
-        df.dropna(inplace=True)
-
-        # Features and target
-        features = [f'lag_{i}' for i in range(1, lags + 1)]
-        x = df[features].values
-        y = df['target_1d'].values.astype(int)
-
-        # -----------------------------
-        # Train/Test Split
-        # -----------------------------
-        x_train = x[:-n_forecast]
-        x_test = x[-n_forecast:]
-        y_train = y[:-n_forecast]
-        y_test = y[-n_forecast:]
-
-        # -----------------------------
         # Scale features
-        # -----------------------------
+        num_features = self.x_train.shape[1]
         scaler = MinMaxScaler(feature_range=(0, 1))
-        x_train_scaled = scaler.fit_transform(x_train)
-        x_test_scaled = scaler.transform(x_test)
+        x_train_scaled = scaler.fit_transform(self.x_train)
 
-        # Reshape for LSTM: (samples, timesteps=lags, features=1)
-        x_train_lstm = x_train_scaled.reshape((x_train_scaled.shape[0], lags, 1))
-        x_test_lstm = x_test_scaled.reshape((x_test_scaled.shape[0], lags, 1))
+        # Reshape for LSTM: (samples, timesteps=num_features, features=1)
+        x_train_lstm = x_train_scaled.reshape((x_train_scaled.shape[0], num_features, 1))
 
         # One-hot encode targets
-        y_train_cat = to_categorical(y_train, num_classes=n_classes)
-        y_test_cat = to_categorical(y_test, num_classes=n_classes)
+        y_train_cat = to_categorical(self.y_train, num_classes=self.__NUM_CLASSES)
 
-        # -----------------------------
-        # Build LSTM Model
-        # -----------------------------
-        model = Sequential()
-        model.add(Input(shape=(lags, 1)))
-        model.add(LSTM(units=50))
-        model.add(Dense(n_classes, activation='softmax'))
+        # Gets LSTM model
+        model = self.build_LSTM_model()
 
-        """"
-        Accuracy: 0.217
-
-Classification Report:
-              precision    recall  f1-score   support
-
-           0      0.214     0.176     0.194        34
-           1      0.109     0.132     0.119        38
-           2      0.259     0.429     0.323        35
-           3      0.263     0.128     0.172        39
-           4      0.276     0.235     0.254        34
-
-    accuracy                          0.217       180
-   macro avg      0.224     0.220     0.212       180
-weighted avg      0.223     0.217     0.210       180
-        """
-
-        # model = Sequential()
-        # model.add(Input(shape=(lags, 1)))
-        # model.add(LSTM(50, return_sequences=True))
-        # model.add(Dropout(0.2))  # 20% dropout
-        # model.add(LSTM(25))
-        # model.add(Dropout(0.2))
-        # model.add(Dense(n_classes, activation='softmax'))
-        """
-        ccuracy: 0.256
-
-Classification Report:
-              precision    recall  f1-score   support
-
-           0      0.244     0.294     0.267        34
-           1      0.238     0.132     0.169        38
-           2      0.262     0.629     0.370        35
-           3      0.400     0.051     0.091        39
-           4      0.241     0.206     0.222        34
-
-    accuracy                          0.256       180
-   macro avg      0.277     0.262     0.224       180
-weighted avg      0.280     0.256     0.220       180
-        """
-
-        model.compile(
-            loss='categorical_crossentropy',
-            optimizer='adam',
-            metrics=['accuracy']
-        )
-        model.summary()
-
-        # -----------------------------
-        # Train Model
-        # -----------------------------
+        # Fits model
         model.fit(
             x_train_lstm,
             y_train_cat,
@@ -148,291 +61,137 @@ weighted avg      0.280     0.256     0.220       180
             verbose=2
         )
 
-        # -----------------------------
+        # Predict next day return quantile
+        x_last = x_train_lstm[-1].reshape((1, num_features, 1))
+        y_pred_prob = model.predict(x_last)
+        y_pred_class = np.argmax(y_pred_prob, axis=1)
+        print(f"Quantile Probability Predictions\n{y_pred_prob}")
+        print(f"Quantile Class Predictions\n{y_pred_class}")
+
+        # Create output DataFrame
+        prob_cols = [f"Prob_Class_{i}" for i in range(self.__NUM_CLASSES)]
+        df_out = pd.DataFrame(y_pred_prob, columns=prob_cols)
+        df_out.insert(0, "Predicted_Class", y_pred_class)
+        df_out.insert(0, "Symbol", self.symbol)
+        return df_out
+
+
+    def test_LSTM(self, lags, test_size):
+        # Gathers test data
+        self.generate_data(lags, test_size)
+        num_features = self.x_train.shape[1]
+
+        # Scale features
+        scaler = MinMaxScaler(feature_range=(0, 1))
+        x_train_scaled = scaler.fit_transform(self.x_train)
+        x_test_scaled = scaler.transform(self.x_test)
+
+        # Reshape for LSTM: (samples, timesteps=num_features, features=1)
+        x_train_lstm = x_train_scaled.reshape((x_train_scaled.shape[0], num_features, 1))
+        x_test_lstm = x_test_scaled.reshape((x_test_scaled.shape[0], num_features, 1))
+
+        # One-hot encode targets
+        y_train_cat = to_categorical(self.y_train, num_classes=self.__NUM_CLASSES)
+
+        # Gets LSTM model
+        model = self.build_LSTM_model()
+        model.fit(
+            x_train_lstm,
+            y_train_cat,
+            epochs=100,
+            batch_size=32,
+            shuffle=False,
+            verbose=2
+        )
+
         # Predict on Test Set
-        # -----------------------------
         y_pred_prob = model.predict(x_test_lstm)
         y_pred_class = np.argmax(y_pred_prob, axis=1)
-        print(y_pred_prob)
-        print(y_pred_class)
-        print(y_test)
-
-        # Accuracy
-        acc = accuracy_score(y_test, y_pred_class)
-        print(f"Accuracy: {acc:.3f}")
-
-        # Detailed classification report
-        print("\nClassification Report:")
-        print(classification_report(y_test, y_pred_class, digits=3))
-
-        # Confusion matrix
-        cm = confusion_matrix(y_test, y_pred_class)
-        disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=[0, 1, 2, 3, 4])
-        disp.plot(cmap="Blues")
-        plt.title("Confusion Matrix (Quantile Classifier)")
-        plt.show()
-
-        # Plot actual vs predicted
-        plt.figure(figsize=(12, 6))
-        plt.plot(df.index[-n_forecast - 30:-n_forecast], y_train[-30:], label='Training Actual')
-        plt.plot(df.index[-n_forecast:], y_test, label='Testing Actual')
-        plt.plot(df.index[-n_forecast:], y_pred_class, label='Predicted')
-        plt.title(f'{n_forecast}-Day Ahead Stock Return Quantile Prediction')
-        plt.xlabel('Date')
-        plt.ylabel('Quantiles')
-        plt.legend()
-        plt.grid(True)
-        plt.show()
+        self.output_test_metrics(y_pred_class, "LSTM")
 
 
-    def run_LSTM(self, n_lookback = 30, n_forecast = 53):
-
-        # Splits data into test and training set
-        train_data = self.price_df[["Price"]].iloc[:-n_forecast].dropna()
-        test_data = self.price_df[["Price"]].iloc[-n_forecast:].dropna()
-        print("Training")
-        print(train_data)
-        print("Testing")
-        print(test_data)
-
-        # Scales the data using Min Max
-        # scaler = StandardScaler()
-        scaler = MinMaxScaler(feature_range=(0, 1))
-        scaler = scaler.fit(train_data)
-        scaled_train = scaler.transform(train_data)
-
-        # Generates inputs and outputs based on lookback and forcasting periods
-
-        x_train = []
-        y_train = []
-        for i in range(n_lookback, len(scaled_train) - n_forecast + 1):
-            x_train.append(scaled_train[i - n_lookback: i])
-            y_train.append(scaled_train[i: i + n_forecast])
-
-        # Convert lists to numpy arrays so that Input layer works
-        x_train = np.array(x_train)
-        y_train = np.array(y_train)
-
-        # # Creates LSTM model
-        # model = Sequential()
-        # model.add(Input(shape=(n_lookback, 1)))
-        # model.add(LSTM(units=50, return_sequences=True))
-        # model.add(LSTM(units=50))
-        # model.add(Dense(n_forecast))
-        # model.compile(loss='mean_squared_error', optimizer='adam')
-        # model.fit(x_train, y_train, epochs=10, batch_size=32, verbose=2)
-        """
-        MSE: 18081.942519307137
-        MAE: 120.39972330729167
-        RMSE: 134.46911362579564
-        MAPE: 0.020008558931045105
-        maybe with epoc 10
-        """
-
-
-        # Initialize model
+    def build_LSTM_model(self):
+        # Build LSTM Model
+        num_features = self.x_train.shape[1]
         model = Sequential()
-        model.add(Input(shape=(n_lookback, 1)))
-        # LSTM layer 1
-        model.add(LSTM(units=50, return_sequences=True))
-        model.add(Dropout(0.20))
-        # LSTM layer 2
-        model.add(LSTM(units=50, return_sequences=True))
-        model.add(Dropout(0.20))
-        # LSTM layer 3
-        model.add(LSTM(units=50, return_sequences=True))
-        model.add(Dropout(0.20))
-        # LSTM layer 4
-        model.add(LSTM(units=50, return_sequences=True))
-        model.add(Dropout(0.20))
-        # LSTM layer 5
-        model.add(LSTM(units=50, return_sequences=True))
-        model.add(Dropout(0.20))
-        # LSTM layer 6
-        model.add(LSTM(units=50, return_sequences=True))
-        model.add(Dropout(0.20))
-        # LSTM layer 7
+        model.add(Input(shape=(num_features, 1)))
         model.add(LSTM(units=50))
-        model.add(Dropout(0.20))
-        # final layer
-        model.add(Dense(n_forecast))
-        model.summary()
+        model.add(Dense(self.__NUM_CLASSES, activation='softmax'))
 
-        model.compile(loss='mean_squared_error', optimizer='adam')
-        model.fit(x_train, y_train, epochs=10, batch_size=32, shuffle=False, verbose=2)
-        """
-        MSE: 7435.416274722417
-        MAE: 66.07750651041667
-        RMSE: 86.2288598714051
-        MAPE: 0.01106870861961337
-        """
+        # model = Sequential()
+        # model.add(Input(shape=(lags, 1)))
+        # model.add(LSTM(50, return_sequences=True))
+        # model.add(Dropout(0.2))  # 20% dropout
+        # model.add(LSTM(25))
+        # model.add(Dropout(0.2))
+        # model.add(Dense(n_classes, activation='softmax'))
+
+        # Train Model
+        model.compile(
+            loss='categorical_crossentropy',
+            optimizer='adam',
+            metrics=['accuracy']
+        )
+        return model
 
 
-        # Generates predictions on test set using last training data
-        # x_pred = scaled_train[-n_lookback - n_forecast:-n_forecast] # Gets enough data to predict last window of training data
-        # x_pred = scaled_train[-n_lookback:] # Gets enough data to predict last window of training data
-        # x_pred = scaler.transform(self.price_df.iloc[-n_lookback - n_forecast:-n_forecast])
-        # x_pred = scaler.transform(train_data[-n_lookback:])
-        x_pred_seq = scaled_train[-n_lookback:].reshape(1, n_lookback, 1)
-        print("Trying to predict with")
-        print(x_pred_seq)
-        y_pred = scaler.inverse_transform(model.predict(x_pred_seq)).flatten()
-        y_pred_df = pd.DataFrame(y_pred, columns=['Price'])
-        print("RAW")
-        print(model.predict(x_pred_seq.reshape(1, n_lookback, 1)))
-        print("y_pred_df")
-        print(y_pred_df)
+    def run_XGBoost(self, lags):
+        # Gathers  data
+        self.generate_data(lags)
 
-        # plot all the series together
-        #TODO I do not think these lines are connecting properly
-        plt.figure(figsize=(10, 5), dpi=100)
-        plt.plot(train_data.index, train_data['Price'], label='Training data')
-        plt.plot(test_data, color='blue', label='Actual Stock Price')
-        plt.plot(test_data.index, y_pred, color='orange', label='Predicted Stock Price')
+        # Load best params
+        with open("xgb_best_params.json", "r") as f:
+            best_params = json.load(f)
 
-        plt.title('SPX Price Prediction')
-        plt.xlabel('Time')
-        plt.ylabel('SPX Return')
-        plt.legend(loc='upper left', fontsize=8)
-        plt.show()
+        # Build model with best params
+        model = XGBClassifier(
+            **best_params,  # unpack tuned params
+            objective='multi:softprob',
+            num_class=5,
+            tree_method='hist',
+            eval_metric='mlogloss',
+            random_state=25,
+            n_jobs=-1
+        )
 
-        # report performance
-        mse = mean_squared_error(test_data['Price'], y_pred)
-        print('MSE: ' + str(mse))
-        mae = mean_absolute_error(test_data['Price'], y_pred)
-        print('MAE: ' + str(mae))
-        rmse = math.sqrt(mean_squared_error(test_data['Price'], y_pred))
-        print('RMSE: ' + str(rmse))
-        mape = np.mean(np.abs(y_pred - test_data['Price']) / np.abs(test_data['Price']))
-        print('MAPE: ' + str(mape))
+        # Train on full data
+        model.fit(self.x_train, self.y_train)
 
-        # plt.figure(figsize=(12, 6))
-        # plt.plot(self.train_data.loc[self.train_data.index <= '2020-11-18']['Price'], 'b', label="Original Price")
-        # plt.plot(self.train_data.loc[self.train_data.index <= '2020-11-18'].index, y_pred, 'r', label="Predicted Price")
-        # plt.xlabel('Time')
-        # plt.ylabel('Price')
-        # plt.legend()
-        # plt.grid(True)
-        # plt.show()
+        # Predict next day
+        x_last = self.x_train.iloc[-1].values.reshape(1, -1)
+        y_pred = model.predict(x_last)
+        print(f"Quantile Class Predictions\n{y_pred}")
 
-        # Organize the results in a dataframe for printing
-        # df_past = pd.DataFrame(train_data)
-        # df_past.rename(columns={'return': 'Actual'}, inplace=True)
-        # df_past['Forecast'] = np.nan
-        # df_past['Forecast'].iloc[-1] = df_past['Actual'].iloc[-1] # Ensures data is connected
-        # # print(df_past)
-        #
-        # df_future = pd.DataFrame(columns=['Actual', 'Forecast'])
-        # df_future['Forecast'] = y_pred
-        # df_future['Actual'] = np.nan
-        # df_future.index = pd.date_range(start=df_past.index[-1] + pd.Timedelta(days=1), periods=n_forecast)  # set index
-        # # print(df_future)
-        #
-        # results = pd.concat([df_past, df_future])
-        # # print(results)
-        #
-        # # plot the results
-        # results.plot(title='SPX Forecast')
-        # plt.show()
+        # Create output DataFrame
+        prob_cols = [f"Prob_Class_{i}" for i in range(self.__NUM_CLASSES)]
+        df_out = pd.DataFrame([[np.nan] * self.__NUM_CLASSES], columns=prob_cols)
+        df_out.insert(0, "Predicted_Class", y_pred)
+        df_out.insert(0, "Symbol", self.symbol)
+        return df_out
 
-    def run_XGBoost(self):
-        # Parameters
-        n_forecast = 53  # number of days into the future to predict
-        lags = 30  # number of lag days to use as features
 
-        # Load stock data
-        df = self.price_df
+    def test_XGBoost(self, lags, test_size):
+        # Gathers test data
+        self.generate_data(lags, test_size)
 
-        # Create features and target
-        for i in range(1, lags + 1):
-            df[f'lag_{i}'] = df['return'].shift(i)
+        # Gets grid_search model
+        grid_search = self.build_XGBoost()
 
-        df[f'target_{n_forecast}d'] = df['return'].shift(-n_forecast)
-        df.dropna(inplace=True)
+        # Trains model
+        grid_search.fit(self.x_train, self.y_train)
+        model = grid_search.best_estimator_
+        print(f"Best Hyperparameters: {grid_search.best_params_}")
 
-        # Features and labels
-        print(df)
-        features = [f'lag_{i}' for i in range(1, lags + 1)]
-        x = df[features]
-        y = df[f'target_{n_forecast}d']
+        # Save to JSON file
+        with open("xgb_best_params.json", "w") as f:
+            json.dump(grid_search.best_params_, f, indent=4)
 
-        # Train/test split
-        x_train = x[:-n_forecast]
-        x_test = x[-n_forecast:]
-        y_train = y[:-n_forecast]
-        y_test = y[-n_forecast:]
+        # Predict on test set
+        y_pred = model.predict(self.x_test)
+        self.output_test_metrics(y_pred, "XGBoost")
 
-        # Model
-        model = XGBRegressor(objective='reg:squarederror', n_estimators=100)
-        model.fit(x_train, y_train)
 
-        # Predictions
-        y_pred = model.predict(x_test)
-
-        # Report performance
-        mse = mean_squared_error(y_test, y_pred)
-        print('MSE: ' + str(mse))
-        mae = mean_absolute_error(y_test, y_pred)
-        print('MAE: ' + str(mae))
-        rmse = math.sqrt(mean_squared_error(y_test, y_pred))
-        print('RMSE: ' + str(rmse))
-        mape = np.mean(np.abs(y_pred - y_test) / np.abs(y_test))
-        print('MAPE: ' + str(mape))
-
-        # Plot actual vs predicted
-        plt.figure(figsize=(12, 6))
-        plt.plot(df.index[:-n_forecast], y_train, label='Training Actual')
-        plt.plot(df.index[-n_forecast:], y_test, label='Testing Actual')
-        plt.plot(df.index[-n_forecast:], y_pred, label='Predicted')
-        plt.title(f'{n_forecast}-Day Ahead Stock Price Prediction')
-        plt.xlabel('Date')
-        plt.ylabel('Price')
-        plt.legend()
-        plt.grid(True)
-        plt.show()
-
-    def run_XGBoostv2(self):
-        # Parameters
-        n_forecast = 180  # how many days ahead we want to forecast iteratively
-        lags = 30 # how many past days to use as input
-
-        # Creates modeling df
-        df = self.price_df.copy()
-
-        # Creates return quantiles
-        df['quantile'] = pd.qcut(df['return'], q=5, labels=False)
-        print(f"Quantile portions:\n{df['quantile'].value_counts(normalize=True).sort_index()}")
-
-        # Create lag features
-        for i in range(1, lags + 1):
-            df[f'lag_{i}'] = df['quantile'].shift(i)
-
-        # One-day ahead target
-        df['target_1d'] = df['quantile'].shift(-1)
-        df.dropna(inplace=True)
-
-        # Add 2-day, 3-day, and 5-day moving averages for return
-        # df['MA_2_r'] = df['return'].rolling(window=2).mean()
-        # df['MA_3_r'] = df['return'].rolling(window=3).mean()
-        # df['MA_5_r'] = df['return'].rolling(window=5).mean()
-
-        # Add 2-day, 3-day, and 5-day moving averages for return quintiles
-        df['MA_2_q'] = df['quantile'].rolling(window=2).mean()
-        df['MA_3_q'] = df['quantile'].rolling(window=3).mean()
-        df['MA_5_q'] = df['quantile'].rolling(window=5).mean()
-
-        # Features and target
-        features = [f'lag_{i}' for i in range(1, lags + 1)]
-        features.extend(['MA_2_q', 'MA_3_q', 'MA_5_q'])
-        x = df[features]
-        y = df['target_1d']
-
-        # Train/test split
-        x_train = x[:-n_forecast]
-        x_test = x[-n_forecast:]
-        y_train = y[:-n_forecast]
-        y_test = y[-n_forecast:]
-
+    def build_XGBoost(self):
         # Create a TimeSeriesSplit object for time series cross-validation
         tscv = TimeSeriesSplit(n_splits=5)
 
@@ -448,10 +207,10 @@ weighted avg      0.280     0.256     0.220       180
             "reg_lambda": [10, 15],
         }
         xgb = XGBClassifier(
-            objective='multi:softprob', # provides actual class probabilities
+            objective='multi:softprob',  # provides actual class probabilities
             num_class=5,
-            tree_method='hist',         # faster than approx
-            eval_metric='mlogloss',     # good for multi-class
+            tree_method='hist',  # faster than approx
+            eval_metric='mlogloss',  # good for multi-class
             random_state=25,
             n_jobs=-1
         )
@@ -459,43 +218,64 @@ weighted avg      0.280     0.256     0.220       180
             estimator=xgb,
             param_grid=param_grid,
             cv=tscv,
-            scoring='accuracy',     # could also do neg_log_loss if we focus on probability calibration
+            scoring='accuracy',  # could also do neg_log_loss if we focus on probability calibration
             verbose=2,
             n_jobs=-1)
-        grid_search.fit(x_train, y_train)
-        """
-        Accuracy: 0.228
 
-Classification Report:
-              precision    recall  f1-score   support
+        return grid_search
 
-         0.0      0.258     0.235     0.246        34
-         1.0      0.206     0.184     0.194        38
-         2.0      0.283     0.371     0.321        35
-         3.0      0.147     0.128     0.137        39
-         4.0      0.229     0.235     0.232        34
 
-    accuracy                          0.228       180
-   macro avg      0.224     0.231     0.226       180
-weighted avg      0.222     0.228     0.223       180
-        """
-        model = grid_search.best_estimator_
-        print(f"Best Hyperparameters: {grid_search.best_params_}")
+    def generate_data(self, lags, test_size=None):
+        # Creates modeling df
+        df = self.symbol_data_df.copy()
 
-        # Predict on test set
-        y_pred = model.predict(x_test)
-        print(y_pred)
+        # Creates return quantiles
+        df['quantile'] = pd.qcut(df['return'], q=5, labels=False)
 
+        # Create lag features
+        for i in range(1, lags + 1):
+            df[f'lag_{i}'] = df['quantile'].shift(i)
+
+        # One-day ahead target
+        df['target_1d'] = df['quantile'].shift(-1)
+
+        # Add 2-day, 3-day, and 5-day moving averages for return quintiles
+        df['MA_2_q'] = df['quantile'].rolling(window=2).mean()
+        df['MA_3_q'] = df['quantile'].rolling(window=3).mean()
+        df['MA_5_q'] = df['quantile'].rolling(window=5).mean()
+
+        # Drop NaNs created by shifting
+        df.dropna(inplace=True)
+
+        # Features and target
+        features = [f'lag_{i}' for i in range(1, lags + 1)]
+        features.extend(['MA_2_q', 'MA_3_q', 'MA_5_q'])
+        x = df[features]
+        y = df['target_1d']
+
+        # Train/test split if needed
+        if test_size:
+            self.x_train = x[:-test_size]
+            self.x_test = x[-test_size:]
+            self.y_train = y[:-test_size]
+            self.y_test = y[-test_size:]
+        else:
+            self.x_train = x
+            self.y_train = y
+
+
+    def output_test_metrics(self, y_pred, model_name):
         # Accuracy
-        acc = accuracy_score(y_test, y_pred)
+        acc = accuracy_score(self.y_test, y_pred)
         print(f"Accuracy: {acc:.3f}")
 
         # Detailed classification report
         print("\nClassification Report:")
-        print(classification_report(y_test, y_pred, digits=3))
+        report = classification_report(self.y_test, y_pred, digits=3)
+        print(report)
 
         # Confusion matrix
-        cm = confusion_matrix(y_test, y_pred)
+        cm = confusion_matrix(self.y_test, y_pred)
         disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=[1, 2, 3, 4, 5])
         disp.plot(cmap="Blues")
         plt.title("Confusion Matrix (Quantile Classifier)")
@@ -503,12 +283,69 @@ weighted avg      0.222     0.228     0.223       180
 
         # Plot actual vs predicted
         plt.figure(figsize=(12, 6))
-        plt.plot(df.index[-n_forecast-30:-n_forecast], y_train[-30:], label='Training Actual')
-        plt.plot(df.index[-n_forecast:], y_test, label='Testing Actual')
-        plt.plot(df.index[-n_forecast:], y_pred, label='Predicted')
-        plt.title(f'{n_forecast}-Day Ahead Stock Price Prediction')
+        plt.plot(self.y_train.index, self.y_train, label='Training Actual')
+        plt.plot(self.y_test.index, self.y_test, label='Testing Actual')
+        plt.plot(self.y_test.index, y_pred, label='Predicted')
+        plt.title('Return Quantile Prediction')
         plt.xlabel('Date')
-        plt.ylabel('Price')
+        plt.ylabel('Return Quantile')
         plt.legend()
         plt.grid(True)
         plt.show()
+
+        # Create results folder and file
+        results_folder = "testing_results"
+        os.makedirs(results_folder, exist_ok=True)
+
+        # Save output to file
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        filename = os.path.join(results_folder, f"{model_name}_test_results_{self.symbol}_{timestamp}.txt")
+        with open(filename, "w") as f:
+            f.write(f"{model_name} Quantile Classifier Testing Results\n")
+            f.write("========================================\n\n")
+            f.write(f"Date/Time: {timestamp}\n")
+            f.write(f"Accuracy: {acc:.4f}\n\n")
+            f.write("Classification Report:\n")
+            f.write(report)
+            f.write("\nConfusion Matrix:\n")
+            f.write(np.array2string(cm, separator=', '))
+            f.write("\n")
+        print(f"✅ Testing results saved to: {filename}")
+
+
+    # def save_prediction_LSTM(self, symbol, y_pred_class, y_pred_prob):
+    #     # Create folder if it doesn't exist
+    #     os.makedirs("testing_results/predictions", exist_ok=True)
+    #
+    #     # Create filename with symbol + date
+    #     today = datetime.date.today().strftime("%Y-%m-%d")
+    #     filename = f"testing_results/predictions/{symbol}_{today}.csv"
+    #
+    #     # Build a DataFrame for readability
+    #     df_pred = pd.DataFrame({
+    #         "Predicted_Class": y_pred_class,
+    #     })
+    #
+    #     # Add predicted probabilities for each class
+    #     for i in range(y_pred_prob.shape[1]):
+    #         df_pred[f"Prob_Class_{i}"] = y_pred_prob[:, i]
+    #
+    #     # Save to CSV
+    #     df_pred.to_csv(filename, index=False)
+    #     print(f"✅ Saved LSTM predictions to {filename}")
+    #
+    #
+    # def save_xgb_prediction(self, symbol, y_pred_class):
+    #     # Create folder if it doesn't exist
+    #     os.makedirs("testing_results/predictions", exist_ok=True)
+    #
+    #     # Create filename using symbol + date
+    #     today = datetime.date.today().strftime("%Y-%m-%d")
+    #     filename = f"testing_results/predictions/{symbol}_{today}.csv"
+    #
+    #     # Save only the class predictions
+    #     df_pred = pd.DataFrame({"Predicted_Class": y_pred_class})
+    #     df_pred.to_csv(filename, index=False)
+    #
+    #     print(f"✅ Saved XGBoost predictions to {filename}")
+
