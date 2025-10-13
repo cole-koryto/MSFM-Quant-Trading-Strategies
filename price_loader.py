@@ -19,8 +19,6 @@ from datetime import datetime, timedelta
 import pandas as pd
 import yfinance as yf
 import time
-import requests
-import io
 import os
 
 class PriceLoader:

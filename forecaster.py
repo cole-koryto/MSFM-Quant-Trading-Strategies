@@ -135,28 +135,36 @@ class Forecaster:
         return model
 
 
-    def run_XGBoost(self):
+    def run_XGBoost(self, lags):
+        # Gathers  data
+        self.generate_data(lags)
+
         # Load best params
-        with open("testing_results/xgb_best_params.json", "r") as f:
+        with open("xgb_best_params.json", "r") as f:
             best_params = json.load(f)
 
         # Build model with best params
         model = XGBClassifier(
-            use_label_encoder=False,
+            **best_params,  # unpack tuned params
+            objective='multi:softprob',
+            num_class=5,
+            tree_method='hist',
             eval_metric='mlogloss',
-            **best_params
+            random_state=25,
+            n_jobs=-1
         )
 
         # Train on full data
         model.fit(self.x_train, self.y_train)
 
         # Predict next day
-        y_pred = model.predict(self.x_train[-1])
+        x_last = self.x_train.iloc[-1].values.reshape(1, -1)
+        y_pred = model.predict(x_last)
         print(f"Quantile Class Predictions\n{y_pred}")
 
         # Create output DataFrame
         prob_cols = [f"Prob_Class_{i}" for i in range(self.__NUM_CLASSES)]
-        df_out = pd.DataFrame([None for _ in range(self.__NUM_CLASSES)], columns=prob_cols)
+        df_out = pd.DataFrame([[np.nan] * self.__NUM_CLASSES], columns=prob_cols)
         df_out.insert(0, "Predicted_Class", y_pred)
         df_out.insert(0, "Symbol", self.symbol)
         return df_out
@@ -291,7 +299,7 @@ class Forecaster:
 
         # Save output to file
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        filename = os.path.join(results_folder, f"{model_name}_test_results_{timestamp}.txt")
+        filename = os.path.join(results_folder, f"{model_name}_test_results_{self.symbol}_{timestamp}.txt")
         with open(filename, "w") as f:
             f.write(f"{model_name} Quantile Classifier Testing Results\n")
             f.write("========================================\n\n")
