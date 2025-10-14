@@ -6,7 +6,7 @@ import datetime
 
 def main():
     # Makes a prediction of next day of each symbol
-    symbols = ["ES=F", "^SPX"]
+    symbols = ["6EZ25.CME", "6JZ25.CME", "ZWZ25.CBT"]
     results = []
     for symbol in symbols:
         forecaster = Forecaster(symbol=symbol)
