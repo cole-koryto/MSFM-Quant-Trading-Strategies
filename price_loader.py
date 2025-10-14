@@ -64,7 +64,7 @@ class PriceLoader:
             
             try:
                 # get only the closing prices (This is really adjusted close)
-                df = yf.download(tickers=batch, start=start, end=end, auto_adjust=True)["Open"]
+                df = yf.download(tickers=batch, start=start, end=end, auto_adjust=True)["Close"]
 
                 # add dataframe to the to-be concatenated dataframe
                 snp_dfs.append(df)
@@ -91,6 +91,7 @@ class PriceLoader:
 
                 # create return column
                 ticker_df["return"] = ticker_df["price"].pct_change()
+                ticker_df.dropna(inplace=True)
 
                 # use ticker for the name
                 ticker_df.to_parquet(f"data/{ticker}.parquet")

@@ -1,6 +1,8 @@
 import datetime
 import json
 import os
+import pprint
+
 import pandas as pd
 import numpy as np
 from matplotlib import pyplot as plt
@@ -60,6 +62,7 @@ class Forecaster:
             shuffle=False,
             verbose=2
         )
+        model.save(f"lstm_model_{self.symbol}.h5")  # HDF5 format
 
         # Predict next day return quantile
         x_last = x_train_lstm[-1].reshape((1, num_features, 1))
