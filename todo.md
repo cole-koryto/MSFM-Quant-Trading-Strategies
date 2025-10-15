@@ -1,6 +1,6 @@
 # Todo List
 
-## Colyto (Dev)
+## Cole (Dev)
 * Re-run and Save Models on Equity Tickers
 * Add Volatility Features (Rolling Window, 3-day)
 * WRDS Sentiment Inputs
