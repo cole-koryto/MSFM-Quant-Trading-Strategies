@@ -1,4 +1,4 @@
-# CME-Trading-Competition-2025
+# MSFM-Quant-Trading-Strategies
 
 ## Requirements
 * Windows requirements in requirement.txt
