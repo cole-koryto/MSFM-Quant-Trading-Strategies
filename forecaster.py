@@ -21,20 +21,20 @@ from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
 
 class Forecaster:
-    def __init__(self, symbol):
+    def __init__(self, ticker):
         self.x_train = None
         self.x_test = None
         self.y_train = None
         self.y_test = None
         self.__NUM_CLASSES = 5
-        self.symbol = symbol
+        self.ticker = ticker
 
         print("Loading data...")
-        self.symbol_data_df = pd.read_parquet(f"./data/{symbol}.parquet")
+        self.ticker_data_df = pd.read_parquet(f"./data/{ticker}.parquet")
 
 
     def run_LSTM(self, lookback):
-        print(f"Running LSTM prediction for {self.symbol}")
+        print(f"Running LSTM prediction for {self.ticker}")
 
         # Gathers data
         self.generate_data(lookback=)
@@ -63,7 +63,7 @@ class Forecaster:
             verbose=2
         )
         os.makedirs("models", exist_ok=True)
-        model.save(f"models/lstm_model_{self.symbol}.h5")  # HDF5 format
+        model.save(f"models/lstm_model_{self.ticker}.h5")  # HDF5 format
 
         # Predict next day return quantile
         x_last = x_train_lstm[-1].reshape((1, num_features, 1))
@@ -76,7 +76,7 @@ class Forecaster:
         prob_cols = [f"Prob_Class_{i}" for i in range(self.__NUM_CLASSES)]
         df_out = pd.DataFrame(y_pred_prob, columns=prob_cols)
         df_out.insert(0, "Predicted_Class", y_pred_class)
-        df_out.insert(0, "Symbol", self.symbol)
+        df_out.insert(0, "Ticker", self.ticker)
         return df_out
 
 
@@ -170,7 +170,7 @@ class Forecaster:
         prob_cols = [f"Prob_Class_{i}" for i in range(self.__NUM_CLASSES)]
         df_out = pd.DataFrame([[np.nan] * self.__NUM_CLASSES], columns=prob_cols)
         df_out.insert(0, "Predicted_Class", y_pred)
-        df_out.insert(0, "Symbol", self.symbol)
+        df_out.insert(0, "Ticker", self.ticker)
         return df_out
 
 
@@ -231,7 +231,7 @@ class Forecaster:
 
     def generate_data(self, lookback, test_size=None):
         # Creates modeling df
-        df = self.symbol_data_df.copy()
+        df = self.ticker_data_df.copy()
 
         # Creates return quantiles
         df['quantile'] = pd.qcut(df['return'], q=5, labels=False)
@@ -303,7 +303,7 @@ class Forecaster:
 
         # Save output to file
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        filename = os.path.join(results_folder, f"{model_name}_test_results_{self.symbol}_{timestamp}.txt")
+        filename = os.path.join(results_folder, f"{model_name}_test_results_{self.ticker}_{timestamp}.txt")
         with open(filename, "w") as f:
             f.write(f"{model_name} Quantile Classifier Testing Results\n")
             f.write("========================================\n\n")
@@ -317,13 +317,13 @@ class Forecaster:
         print(f"✅ Testing results saved to: {filename}")
 
 
-    # def save_prediction_LSTM(self, symbol, y_pred_class, y_pred_prob):
+    # def save_prediction_LSTM(self, ticker, y_pred_class, y_pred_prob):
     #     # Create folder if it doesn't exist
     #     os.makedirs("testing_results/predictions", exist_ok=True)
     #
-    #     # Create filename with symbol + date
+    #     # Create filename with ticker + date
     #     today = datetime.date.today().strftime("%Y-%m-%d")
-    #     filename = f"testing_results/predictions/{symbol}_{today}.csv"
+    #     filename = f"testing_results/predictions/{ticker}_{today}.csv"
     #
     #     # Build a DataFrame for readability
     #     df_pred = pd.DataFrame({
@@ -339,13 +339,13 @@ class Forecaster:
     #     print(f"✅ Saved LSTM predictions to {filename}")
     #
     #
-    # def save_xgb_prediction(self, symbol, y_pred_class):
+    # def save_xgb_prediction(self, ticker, y_pred_class):
     #     # Create folder if it doesn't exist
     #     os.makedirs("testing_results/predictions", exist_ok=True)
     #
-    #     # Create filename using symbol + date
+    #     # Create filename using ticker + date
     #     today = datetime.date.today().strftime("%Y-%m-%d")
-    #     filename = f"testing_results/predictions/{symbol}_{today}.csv"
+    #     filename = f"testing_results/predictions/{ticker}_{today}.csv"
     #
     #     # Save only the class predictions
     #     df_pred = pd.DataFrame({"Predicted_Class": y_pred_class})
