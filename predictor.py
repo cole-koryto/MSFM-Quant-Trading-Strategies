@@ -1,0 +1,64 @@
+import pandas as pd
+import numpy as np
+from forecaster import Forecaster
+from model_loader import ModelLoader
+from sklearn.preprocessing import MinMaxScaler
+
+class Predictor():
+    
+    def __init__(self, model_type, ticker):
+        self.model_type = model_type # lstm
+        self.ticker = ticker
+
+        # Load time series data for ticker
+        self.price_data = pd.read_parquet(f"./data/{ticker}.parquet")
+
+        # Load prediction model for ticker
+        self.model_loader = ModelLoader(model_type, ticker)
+        self.model = self.model_loader.load_model()
+
+    def __create_sequences(self, data, lookback):
+        X = []
+        for i in range(lookback, len(data)):
+            X.append(data[i - lookback:i])
+        return np.array(X)
+
+
+    def prepare_data(self):
+        
+        # Pull lookback and num_features from .h5
+        input_shape = self.model.input_shape
+        lookback = input_shape[1]
+        num_features = input_shape[2]
+
+        forecaster = Forecaster(self.ticker)
+        forecaster.generate_data(lookback=lookback)
+        data = forecaster.x_train # no test-size provided
+
+        scaler = MinMaxScaler(feature_range=(0, 1))
+        data_scaled = scaler.fit_transform(data)
+
+        # Reshape for LSTM: (samples, timesteps=num_features, features=1)
+        data_shaped = data_scaled.reshape((data_scaled.shape[0], num_features, 1))
+
+        data_seq = self.__create_sequences(data=data_shaped, lookback=lookback)
+
+        return data_seq            
+
+
+    def generate_predictions(self):
+        df_pred = self.price_data.copy()
+
+        model = self.model
+        X = self.prepare_data()
+
+        if self.model_type == "lstm":
+
+            y_pred_prob = model.predict(X, verbose=0)
+
+            if y_pred_prob.ndim > 1 and y_pred_prob.shape[1] > 1:
+                for i in range(y_pred_prob.shape[1]):
+                    df_pred[f"prob_class_{i}"] = y_pred_prob[:, i]
+                df_pred["predicted_class"] = np.argmax(y_pred_prob, axis=1)
+
+        return df_pred

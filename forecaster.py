@@ -37,7 +37,7 @@ class Forecaster:
         print(f"Running LSTM prediction for {self.ticker}")
 
         # Gathers data
-        self.generate_data(lookback=)
+        self.generate_data(lookback)
 
         # Scale features
         num_features = self.x_train.shape[1]

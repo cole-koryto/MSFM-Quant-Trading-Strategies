@@ -14,10 +14,10 @@
 ## Jonny (Trader)
 * Submit Trading Decisions on CQGOne and Bloomberg
 
-## To-Do: Model Predictions and Backtest Pipeline
+## To-Do: Model Predictions and Backtest Pipeline (Adith)
 
-- [ ] Build model_loader for each symbol 
-- [ ] Run model and generate prediction CSV on full time series
+- [ x ] Build model_loader for each symbol 
+- [ x ] Run model and generate prediction CSV on full time series
 - [ ] Load the generated CSV into a `pandas.DataFrame`  
 - [ ] Add two new columns:
   - [ ] Daily returns for the symbol (from `.parquet`)

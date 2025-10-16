@@ -8,5 +8,9 @@ class ModelLoader():
 
     def load_model(self):
         model_path = f"models/{self.model_type}_model_{self.ticker}.h5"
-        model = tf.keras.models.load_model(model_path)
+        try:
+            model = tf.keras.models.load_model(model_path, compile=False)
+        except TypeError:
+            # Fallback: load without validation
+            model = tf.keras.models.load_model(model_path, compile=False, safe_mode=False)
         return model
