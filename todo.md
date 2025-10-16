@@ -18,13 +18,11 @@
 
 - [ x ] Build model_loader for each symbol 
 - [ x ] Run model and generate prediction CSV on full time series
-- [ ] Load the generated CSV into a `pandas.DataFrame`  
-- [ ] Add two new columns:
-  - [ ] Daily returns for the symbol (from `.parquet`)
-  - [ ] Model signals 
-- [ ] Assign trading signals based on model predictions (`1`, `-1`, `0`)  
-- [ ] Create a verbose signal column with labels: `"BUY"`, `"SELL"`, `"HOLD"`  
-- [ ] Add a new column for **total return**  
-- [ ] Implement a **real backtest**:
-  - [ ] Use signals to compute compound returns (`(1 + ret * signal)`)  
+- [ x ] Load the generated CSV into a `pandas.DataFrame`  
+- [ x ] Add two new columns:
+  - [ x ] Daily returns for the symbol (from `.parquet`)
+  - [ x ] Model signals 
+- [ x ] Assign trading signals based on model predictions (`1`, `-1`, `0`)  
+- [ x ] Implement a **real backtest**:
+  - [ x ] Use signals to compute compound returns (`(1 + ret * signal)`)  
 - [ ] Plot total return as a time series graph  
