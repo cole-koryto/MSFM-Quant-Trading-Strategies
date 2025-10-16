@@ -1,6 +1,8 @@
 # Project Specific
 data/
 testing_results/
+models/*.h5
+models/*.keras
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
