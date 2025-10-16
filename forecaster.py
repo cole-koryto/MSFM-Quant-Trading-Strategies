@@ -33,11 +33,11 @@ class Forecaster:
         self.symbol_data_df = pd.read_parquet(f"./data/{symbol}.parquet")
 
 
-    def run_LSTM(self, lags):
+    def run_LSTM(self, lookback):
         print(f"Running LSTM prediction for {self.symbol}")
 
         # Gathers data
-        self.generate_data(lags)
+        self.generate_data(lookback=)
 
         # Scale features
         num_features = self.x_train.shape[1]
@@ -80,9 +80,9 @@ class Forecaster:
         return df_out
 
 
-    def test_LSTM(self, lags, test_size):
+    def test_LSTM(self, lookback, test_size):
         # Gathers test data
-        self.generate_data(lags, test_size)
+        self.generate_data(lookback, test_size)
         num_features = self.x_train.shape[1]
 
         # Scale features
@@ -123,7 +123,7 @@ class Forecaster:
         model.add(Dense(self.__NUM_CLASSES, activation='softmax'))
 
         # model = Sequential()
-        # model.add(Input(shape=(lags, 1)))
+        # model.add(Input(shape=(lookback, 1)))
         # model.add(LSTM(50, return_sequences=True))
         # model.add(Dropout(0.2))  # 20% dropout
         # model.add(LSTM(25))
@@ -139,9 +139,9 @@ class Forecaster:
         return model
 
 
-    def run_XGBoost(self, lags):
+    def run_XGBoost(self, lookback):
         # Gathers  data
-        self.generate_data(lags)
+        self.generate_data(lookback)
 
         # Load best params
         with open("xgb_best_params.json", "r") as f:
@@ -174,9 +174,9 @@ class Forecaster:
         return df_out
 
 
-    def test_XGBoost(self, lags, test_size):
+    def test_XGBoost(self, lookback, test_size):
         # Gathers test data
-        self.generate_data(lags, test_size)
+        self.generate_data(lookback, test_size)
 
         # Gets grid_search model
         grid_search = self.build_XGBoost()
@@ -229,7 +229,7 @@ class Forecaster:
         return grid_search
 
 
-    def generate_data(self, lags, test_size=None):
+    def generate_data(self, lookback, test_size=None):
         # Creates modeling df
         df = self.symbol_data_df.copy()
 
@@ -237,7 +237,7 @@ class Forecaster:
         df['quantile'] = pd.qcut(df['return'], q=5, labels=False)
 
         # Create lag features
-        for i in range(1, lags + 1):
+        for i in range(1, lookback + 1):
             df[f'lag_{i}'] = df['quantile'].shift(i)
 
         # One-day ahead target
@@ -252,7 +252,7 @@ class Forecaster:
         df.dropna(inplace=True)
 
         # Features and target
-        features = [f'lag_{i}' for i in range(1, lags + 1)]
+        features = [f'lag_{i}' for i in range(1, lookback + 1)]
         features.extend(['MA_2_q', 'MA_3_q', 'MA_5_q'])
         x = df[features]
         y = df['target_1d']
