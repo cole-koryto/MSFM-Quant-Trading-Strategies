@@ -16,6 +16,7 @@ class Predictor():
         # Load prediction model for ticker
         self.model_loader = ModelLoader(model_type, ticker)
         self.model = self.model_loader.load_model()
+        self.model.summary()
 
     def __create_sequences(self, data, lookback):
         X = []
@@ -38,12 +39,14 @@ class Predictor():
         scaler = MinMaxScaler(feature_range=(0, 1))
         data_scaled = scaler.fit_transform(data)
 
-        # Reshape for LSTM: (samples, timesteps=num_features, features=1)
-        data_shaped = data_scaled.reshape((data_scaled.shape[0], num_features, 1))
-
+        # Reshape same as training - NO __create_sequences
+        data_shaped = data_scaled.reshape((data_scaled.shape[0], num_features, 1))  # (n_samples, 36, 1)
+        print(f"data_shaped shape: {data_shaped.shape}")
+        
         data_seq = self.__create_sequences(data=data_shaped, lookback=lookback)
+        print(f"data_seq shape: {data_seq.shape}")
 
-        return data_seq            
+        return data_seq        
 
 
     def generate_predictions(self):
@@ -51,6 +54,7 @@ class Predictor():
 
         model = self.model
         X = self.prepare_data()
+        print(X)
 
         if self.model_type == "lstm":
 

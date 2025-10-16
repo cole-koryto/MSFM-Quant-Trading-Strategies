@@ -44,29 +44,32 @@ class Forecaster:
         scaler = MinMaxScaler(feature_range=(0, 1))
         x_train_scaled = scaler.fit_transform(self.x_train)
 
-        # Reshape for LSTM: (samples, timesteps=num_features, features=1)
-        x_train_lstm = x_train_scaled.reshape((x_train_scaled.shape[0], num_features, 1))
+        # Create rolling windows manually for LSTM
+        n_samples = x_train_scaled.shape[0] - lookback + 1
+        x_train_lstm = np.zeros((n_samples, lookback, num_features))
+        for i in range(n_samples):
+            x_train_lstm[i] = x_train_scaled[i : i + lookback]
 
         # One-hot encode targets
-        y_train_cat = to_categorical(self.y_train, num_classes=self.__NUM_CLASSES)
+        y_train_cat = to_categorical(self.y_train[lookback-1:], num_classes=self.__NUM_CLASSES)
 
         # Gets LSTM model
-        model = self.build_LSTM_model()
+        model = self.build_LSTM_model(lookback)
 
         # Fits model
         model.fit(
             x_train_lstm,
             y_train_cat,
-            epochs=100,
+            epochs=50,
             batch_size=32,
             shuffle=False,
             verbose=2
         )
         os.makedirs("models", exist_ok=True)
-        model.save(f"models/lstm_model_{self.ticker}.h5")  # HDF5 format
+        model.save(f"models/lstm_model_{self.ticker}", save_format='tf')
 
         # Predict next day return quantile
-        x_last = x_train_lstm[-1].reshape((1, num_features, 1))
+        x_last = x_train_lstm[-1:].reshape(1, lookback, num_features)
         y_pred_prob = model.predict(x_last)
         y_pred_class = np.argmax(y_pred_prob, axis=1)
         print(f"Quantile Probability Predictions\n{y_pred_prob}")
@@ -81,7 +84,7 @@ class Forecaster:
 
 
     def test_LSTM(self, lookback, test_size):
-        # Gathers test data
+        # Generate train/test data
         self.generate_data(lookback, test_size)
         num_features = self.x_train.shape[1]
 
@@ -90,15 +93,25 @@ class Forecaster:
         x_train_scaled = scaler.fit_transform(self.x_train)
         x_test_scaled = scaler.transform(self.x_test)
 
-        # Reshape for LSTM: (samples, timesteps=num_features, features=1)
-        x_train_lstm = x_train_scaled.reshape((x_train_scaled.shape[0], num_features, 1))
-        x_test_lstm = x_test_scaled.reshape((x_test_scaled.shape[0], num_features, 1))
+        # Create rolling windows for LSTM
+        n_train_samples = x_train_scaled.shape[0] - lookback + 1
+        x_train_lstm = np.zeros((n_train_samples, lookback, num_features))
+        for i in range(n_train_samples):
+            x_train_lstm[i] = x_train_scaled[i:i+lookback]
 
-        # One-hot encode targets
-        y_train_cat = to_categorical(self.y_train, num_classes=self.__NUM_CLASSES)
+        y_train_cat = to_categorical(self.y_train[lookback-1:], num_classes=self.__NUM_CLASSES)
 
-        # Gets LSTM model
-        model = self.build_LSTM_model()
+        n_test_samples = x_test_scaled.shape[0] - lookback + 1
+        x_test_lstm = np.zeros((n_test_samples, lookback, num_features))
+        for i in range(n_test_samples):
+            x_test_lstm[i] = x_test_scaled[i:i+lookback]
+
+        y_test_cat = to_categorical(self.y_test[lookback-1:], num_classes=self.__NUM_CLASSES)
+
+        # Build model with proper input shape
+        model = self.build_LSTM_model(lookback)
+
+        # Train model
         model.fit(
             x_train_lstm,
             y_train_cat,
@@ -111,24 +124,25 @@ class Forecaster:
         # Predict on Test Set
         y_pred_prob = model.predict(x_test_lstm)
         y_pred_class = np.argmax(y_pred_prob, axis=1)
-        self.output_test_metrics(y_pred_class, "LSTM")
+        self.LSTM_test_metrics(y_pred_class, "LSTM",lookback=lookback)
 
 
-    def build_LSTM_model(self):
+    def build_LSTM_model(self, lookback):
         # Build LSTM Model
         num_features = self.x_train.shape[1]
-        model = Sequential()
-        model.add(Input(shape=(num_features, 1)))
-        model.add(LSTM(units=50))
-        model.add(Dense(self.__NUM_CLASSES, activation='softmax'))
 
         # model = Sequential()
-        # model.add(Input(shape=(lookback, 1)))
-        # model.add(LSTM(50, return_sequences=True))
-        # model.add(Dropout(0.2))  # 20% dropout
-        # model.add(LSTM(25))
-        # model.add(Dropout(0.2))
-        # model.add(Dense(n_classes, activation='softmax'))
+        # model.add(Input(shape=(lookback, num_features)))
+        # model.add(LSTM(units=50))
+        # model.add(Dense(self.__NUM_CLASSES, activation='softmax'))
+
+        model = Sequential()
+        model.add(Input(shape=(lookback, num_features)))
+        model.add(LSTM(50, return_sequences=True))
+        model.add(Dropout(0.2))  # 20% dropout
+        model.add(LSTM(25))
+        model.add(Dropout(0.2))
+        model.add(Dense(self.__NUM_CLASSES, activation='softmax'))
 
         # Train Model
         model.compile(
@@ -192,7 +206,7 @@ class Forecaster:
 
         # Predict on test set
         y_pred = model.predict(self.x_test)
-        self.output_test_metrics(y_pred, "XGBoost")
+        self.XGBoost_output_test_metrics(y_pred, "XGBoost")
 
 
     def build_XGBoost(self):
@@ -238,10 +252,16 @@ class Forecaster:
 
         # Create lag features
         for i in range(1, lookback + 1):
-            df[f'lag_{i}'] = df['quantile'].shift(i)
+            df[f'quantile_lag_{i}'] = df['quantile'].shift(i)
+            df[f'return_lag_{i}'] = df['return'].shift(i)
 
         # One-day ahead target
         df['target_1d'] = df['quantile'].shift(-1)
+
+        # Add 2-day, 3-day, and 5-day moving averages for returns
+        df['MA_2_ret'] = df['return'].rolling(window=2).mean()
+        df['MA_3_ret'] = df['return'].rolling(window=3).mean()
+        df['MA_5_ret'] = df['return'].rolling(window=5).mean()
 
         # Add 2-day, 3-day, and 5-day moving averages for return quintiles
         df['MA_2_q'] = df['quantile'].rolling(window=2).mean()
@@ -252,8 +272,10 @@ class Forecaster:
         df.dropna(inplace=True)
 
         # Features and target
-        features = [f'lag_{i}' for i in range(1, lookback + 1)]
+        features = [f'quantile_lag_{i}' for i in range(1, lookback + 1)]
+        features.extend([f'return_lag_{i}' for i in range(1, lookback + 1)])
         features.extend(['MA_2_q', 'MA_3_q', 'MA_5_q'])
+        features.extend(['MA_2_ret', 'MA_3_ret', 'MA_5_ret'])
         x = df[features]
         y = df['target_1d']
 
@@ -268,7 +290,58 @@ class Forecaster:
             self.y_train = y
 
 
-    def output_test_metrics(self, y_pred, model_name):
+    def LSTM_output_test_metrics(self, y_pred, model_name, lookback=1):
+        # Align y_test with predictions
+        y_test_aligned = self.y_test[lookback-1:]
+
+        # Accuracy
+        acc = accuracy_score(y_test_aligned, y_pred)
+        print(f"Accuracy: {acc:.3f}")
+
+        # Detailed classification report
+        print("\nClassification Report:")
+        report = classification_report(y_test_aligned, y_pred, digits=3)
+        print(report)
+
+        # Confusion matrix
+        cm = confusion_matrix(y_test_aligned, y_pred)
+        disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=[0,1,2,3,4])
+        disp.plot(cmap="Blues")
+        plt.title("Confusion Matrix (Quantile Classifier)")
+        plt.show()
+
+        # Plot actual vs predicted
+        plt.figure(figsize=(12, 6))
+        plt.plot(self.y_train.index, self.y_train, label='Training Actual')
+        plt.plot(y_test_aligned.index, y_test_aligned, label='Testing Actual')
+        plt.plot(y_test_aligned.index, y_pred, label='Predicted')
+        plt.title('Return Quantile Prediction')
+        plt.xlabel('Date')
+        plt.ylabel('Return Quantile')
+        plt.legend()
+        plt.grid(True)
+        plt.show()
+
+        # Create results folder and file
+        results_folder = "testing_results"
+        os.makedirs(results_folder, exist_ok=True)
+
+        # Save output to file
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        filename = os.path.join(results_folder, f"{model_name}_test_results_{self.ticker}_{timestamp}.txt")
+        with open(filename, "w") as f:
+            f.write(f"{model_name} Quantile Classifier Testing Results\n")
+            f.write("========================================\n\n")
+            f.write(f"Date/Time: {timestamp}\n")
+            f.write(f"Accuracy: {acc:.4f}\n\n")
+            f.write("Classification Report:\n")
+            f.write(report)
+            f.write("\nConfusion Matrix:\n")
+            f.write(np.array2string(cm, separator=', '))
+            f.write("\n")
+        print(f"✅ Testing results saved to: {filename}")
+
+    def XGBoost_output_test_metrics(self, y_pred, model_name):
         # Accuracy
         acc = accuracy_score(self.y_test, y_pred)
         print(f"Accuracy: {acc:.3f}")
@@ -315,7 +388,6 @@ class Forecaster:
             f.write(np.array2string(cm, separator=', '))
             f.write("\n")
         print(f"✅ Testing results saved to: {filename}")
-
 
     # def save_prediction_LSTM(self, ticker, y_pred_class, y_pred_prob):
     #     # Create folder if it doesn't exist
