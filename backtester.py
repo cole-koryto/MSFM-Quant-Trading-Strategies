@@ -28,13 +28,17 @@ class Backtester():
         return df_preds
     
     def generate_backtest_data(self, data):
-
         if self.strategy == "dollar-neutral":
             strategy = Dollar_Neutral(data)
             backtest_data = strategy.calculate_weights()
             backtest_data = strategy.calculate_initial_position_size(self.initial_value)
+
+            print(backtest_data.head(10))
+            print(backtest_data["position"].value_counts())
+            print(backtest_data["position_value"].head(10))
+
         else:
-            None
+            backtest_data = data  # fallback if no strategy
 
         return backtest_data
     
@@ -42,23 +46,32 @@ class Backtester():
 
         portfolio_value = pd.Series(self.initial_value, index=data.index.unique())
 
-        for idx in data.index.unique()[1:]:
-            prev_date = data.index.unique()[data.index.unique().get_loc(idx) - 1]
+        dates = data.index.unique()
+        for i in range(1, len(dates)):
+            idx = dates[i]
+            prev_date = dates[i - 1]
 
             curr_slice = data.loc[idx].copy()
             prev_slice = data.loc[prev_date].copy()
 
             for ticker in curr_slice["ticker"]:
-                data.loc[(data.index == idx) & (data["ticker"] == ticker), "position_value"] = (
-                    prev_slice[prev_slice["ticker"] == ticker]["position_value"].iloc[0] * 
-                    (1 + curr_slice[curr_slice["ticker"] == ticker]["return"].iloc[0])
-                )
+                # Safely get previous position_value
+                prev_pos = prev_slice.loc[prev_slice["ticker"] == ticker, "position_value"]
+                prev_pos_value = prev_pos.iloc[0] if not prev_pos.empty else 0
 
-            # Calculate portfolio value after all dates are processed
+                # Safely get current return
+                curr_ret = curr_slice.loc[curr_slice["ticker"] == ticker, "return"]
+                curr_ret_value = curr_ret.iloc[0] if not curr_ret.empty else 0
+
+                # Update position_value
+                data.loc[(data.index == idx) & (data["ticker"] == ticker), "position_value"] = prev_pos_value * (1 + curr_ret_value)
+
+            # Calculate longs and shorts
             longs_value = data.loc[(data.index == idx) & (data["position"] == 1), "position_value"].sum()
-            shorts_value = data.loc[(data.index == idx) & (data["position"] == -1), "position_value"].sum().abs()
+            shorts_value = data.loc[(data.index == idx) & (data["position"] == -1), "position_value"].sum()
 
-            portfolio_value[idx] = longs_value + shorts_value
+            # Assign portfolio value
+            portfolio_value.loc[idx] = longs_value + abs(shorts_value)
 
         return portfolio_value
     

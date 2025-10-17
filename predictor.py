@@ -69,7 +69,9 @@ class Predictor():
         model = self.model
 
         X = self.prepare_data()
-        df_pred = X.copy()
+        
+        df_pred = self.price_data.copy()
+        df_pred = df_pred.reindex(X.index)
 
         if self.model_type == "lstm":
             y_pred_prob = model.predict(X)

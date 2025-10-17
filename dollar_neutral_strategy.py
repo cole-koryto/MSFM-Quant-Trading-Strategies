@@ -1,6 +1,5 @@
 import pandas as pd
 from strategy import Strategy
-from backtester import Backtester
 
 class Dollar_Neutral(Strategy):
         
@@ -16,31 +15,30 @@ class Dollar_Neutral(Strategy):
         backtest_df.loc[backtest_df["predicted_class"] == 0, "position"] = -1 # shorts
 
         # Assign overweights and underweights
-        backtest_df["weight"] = 0
-        for date in backtest_df.index.unique():
-            
-            date_slice = backtest_df.loc[date]
+        backtest_df["weight"] = 0.0
 
-            longs = date_slice["position"] == 1
-            shorts = date_slice["position"] == -1
+        # Group by date to assign weights
+        for date, group in backtest_df.groupby(backtest_df.index):
+            longs = group["position"] == 1
+            shorts = group["position"] == -1
 
+            # Assign long weights
             if longs.any():
-                long_tickers = date_slice[longs]["ticker"]
-                backtest_df.loc[(backtest_df.index == date) & (backtest_df["ticker"].isin(long_tickers)), "weight"] = (
-                    date_slice.loc[longs, "prob_class_4"] /
-                    date_slice.loc[longs, "prob_class_4"].sum()
-                ) * date_slice.loc[longs, "position"]
+                long_probs = group.loc[longs, "prob_class_4"]
+                long_weights = (long_probs / long_probs.sum()) * 1  # longs = +1
+                backtest_df.loc[long_weights.index, "weight"] = long_weights
 
+            # Assign short weights
             if shorts.any():
-                short_tickers = date_slice[shorts]["ticker"]
-                backtest_df.loc[(backtest_df.index == date) & (backtest_df["ticker"].isin(short_tickers)), "weight"] = (
-                    date_slice.loc[shorts, "prob_class_4"] /
-                    date_slice.loc[shorts, "prob_class_4"].sum()
-                ) * date_slice.loc[shorts, "position"]
+                short_probs = group.loc[shorts, "prob_class_4"]
+                short_weights = (short_probs / short_probs.sum()) * -1  # shorts = -1
+                backtest_df.loc[short_weights.index, "weight"] = short_weights
 
-        return backtest_df
+            return backtest_df
     
     def calculate_initial_position_size(self, initial_value):
+
+        backtest_df = self.data.copy()
 
         initial_longs_value = initial_value / 2
         initial_shorts_value = initial_value / 2
@@ -51,5 +49,7 @@ class Dollar_Neutral(Strategy):
         longs_mask = first_date_mask & (backtest_df["position"] == 1)
         shorts_mask = first_date_mask & (backtest_df["position"] == -1)
         
-        backtest_df.loc[longs_mask, "position_value"] = initial_longs_value * backtest_df.loc[longs_mask, "weight"] * backtest_df.loc[longs_mask, "position"]
-        backtest_df.loc[shorts_mask, "position_value"] = initial_shorts_value * backtest_df.loc[shorts_mask, "weight"] * backtest_df.loc[shorts_mask, "position"]
+        backtest_df.loc[longs_mask, "position_value"] = initial_longs_value * backtest_df.loc[longs_mask, "weight"]
+        backtest_df.loc[shorts_mask, "position_value"] = initial_shorts_value * backtest_df.loc[shorts_mask, "weight"]
+    
+        return backtest_df
