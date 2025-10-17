@@ -20,6 +20,7 @@ import pandas as pd
 import yfinance as yf
 import time
 import os
+from get_nsdq_tickers import get_nasdaq_100
 
 class PriceLoader:
 
@@ -105,5 +106,6 @@ class PriceLoader:
 
 
 if __name__ == "__main__":
-    loader = PriceLoader(['6EZ25.CME', '6JZ25.CME', 'ZWZ25.CBT'])
+    tickers = get_nasdaq_100()
+    loader = PriceLoader(tickers)
     loader.save_to_parquet((datetime.now() - timedelta(days=5*365)).strftime("%Y-%m-%d"), datetime.now().strftime("%Y-%m-%d"))

@@ -6,8 +6,9 @@ from dollar_neutral_strategy import Dollar_Neutral
 
 class Backtester():
 
-    def __init__(self, ticker_list, strategy, initial_value):
+    def __init__(self, ticker_list, model_type, strategy, initial_value):
         self.ticker_list = ticker_list
+        self.model_type = model_type
         self.strategy = strategy # dollar-neutral
         self.initial_value = initial_value
     
@@ -17,9 +18,9 @@ class Backtester():
         ticker_df_list = []
 
         for ticker in self.ticker_list:
-            predictor = Predictor(model_type="lstm", ticker=ticker)
+            predictor = Predictor(model_type=self.model_type, ticker=ticker)
             df_pred_ticker = predictor.generate_predictions()
-            df_pred_ticker.insert(0, "ticker", self.ticker)
+            df_pred_ticker.insert(0, "ticker", ticker)
             ticker_df_list.append(df_pred_ticker)
             
         df_preds = pd.concat(ticker_df_list, join='inner')
@@ -98,16 +99,10 @@ class Backtester():
         return portfolio_metrics
     
     def backtest(self):
-        # Combine all ticker data
+
         data = self.combine_ticker_dfs()
-        
-        # Generate backtest data with weights and initial positions
         backtest_data = self.generate_backtest_data(data)
-        
-        # Calculate portfolio value over time
         portfolio_value = self.calculate_portfolio_value(backtest_data)
-        
-        # Calculate performance metrics
         portfolio_metrics = self.calculate_portfolio_metrics(portfolio_value)
         
         return {

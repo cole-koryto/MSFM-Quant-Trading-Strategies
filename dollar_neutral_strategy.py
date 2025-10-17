@@ -1,5 +1,6 @@
 import pandas as pd
 from strategy import Strategy
+from backtester import Backtester
 
 class Dollar_Neutral(Strategy):
         
@@ -40,8 +41,6 @@ class Dollar_Neutral(Strategy):
         return backtest_df
     
     def calculate_initial_position_size(self, initial_value):
-
-        backtest_df = self.generate_backtest_data()
 
         initial_longs_value = initial_value / 2
         initial_shorts_value = initial_value / 2

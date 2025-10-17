@@ -175,6 +175,19 @@ class Forecaster:
         # Train on full data
         model.fit(self.x_train, self.y_train)
 
+        # Save model
+        os.makedirs("models", exist_ok=True)
+        model.save_model(f"models/xgb_model_{self.ticker}.json")
+
+        metadata = {
+            "lookback": lookback,
+            "features": list(self.x_train.columns),
+            "model_type": "XGBRegressor"
+        }
+
+        with open(f"models/xgb_metadata_{self.ticker}.json", "w") as f:
+            json.dump(metadata, f)
+
         # Predict next day
         x_last = self.x_train.iloc[-1].values.reshape(1, -1)
         y_pred_prob = model.predict_proba(x_last)
@@ -251,7 +264,7 @@ class Forecaster:
         df = self.ticker_data_df.copy()
 
         # Creates return quantiles
-        df['quantile'] = pd.qcut(df['return'], q=5, labels=False)
+        df['quantile'] = pd.qcut(df['return'], q=3, labels=False)
 
         # Create lag features
         for i in range(1, lookback + 1):
@@ -355,8 +368,15 @@ class Forecaster:
         print(report)
 
         # Confusion matrix
+        # cm = confusion_matrix(self.y_test, y_pred)
+        # disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=[1, 2, 3, 4, 5])
+        # disp.plot(cmap="Blues")
+        # plt.title("Confusion Matrix (Quantile Classifier)")
+        # plt.show()
+
         cm = confusion_matrix(self.y_test, y_pred)
-        disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=[1, 2, 3, 4, 5])
+        classes = np.unique(self.y_test)  # [0, 1, 2, 3]
+        disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=classes)
         disp.plot(cmap="Blues")
         plt.title("Confusion Matrix (Quantile Classifier)")
         plt.show()
