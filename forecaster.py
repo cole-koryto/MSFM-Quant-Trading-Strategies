@@ -144,7 +144,7 @@ class Forecaster:
         self.generate_data(lookback)
 
         # Load best params
-        with open("xgb_best_params.json", "r") as f:
+        with open(f"models/xgb_best_params_{self.ticker}.json", "r") as f:
             best_params = json.load(f)
 
         # Build model with best params
@@ -163,13 +163,15 @@ class Forecaster:
 
         # Predict next day
         x_last = self.x_train.iloc[-1].values.reshape(1, -1)
-        y_pred = model.predict(x_last)
-        print(f"Quantile Class Predictions\n{y_pred}")
+        y_pred_prob = model.predict_proba(x_last)
+        y_pred_class = model.predict(x_last)
+        print(f"Quantile Probability Predictions\n{y_pred_prob}")
+        print(f"Quantile Class Predictions\n{y_pred_class}")
 
         # Create output DataFrame
         prob_cols = [f"Prob_Class_{i}" for i in range(self.__NUM_CLASSES)]
-        df_out = pd.DataFrame([[np.nan] * self.__NUM_CLASSES], columns=prob_cols)
-        df_out.insert(0, "Predicted_Class", y_pred)
+        df_out = pd.DataFrame(y_pred_prob, columns=prob_cols)
+        df_out.insert(0, "Predicted_Class", y_pred_class)
         df_out.insert(0, "Ticker", self.ticker)
         return df_out
 
@@ -187,7 +189,8 @@ class Forecaster:
         print(f"Best Hyperparameters: {grid_search.best_params_}")
 
         # Save to JSON file
-        with open("xgb_best_params.json", "w") as f:
+        os.makedirs("models", exist_ok=True)
+        with open(f"models/xgb_best_params_{self.ticker}.json", "w") as f:
             json.dump(grid_search.best_params_, f, indent=4)
 
         # Predict on test set
@@ -315,41 +318,3 @@ class Forecaster:
             f.write(np.array2string(cm, separator=', '))
             f.write("\n")
         print(f"✅ Testing results saved to: {filename}")
-
-
-    # def save_prediction_LSTM(self, ticker, y_pred_class, y_pred_prob):
-    #     # Create folder if it doesn't exist
-    #     os.makedirs("testing_results/predictions", exist_ok=True)
-    #
-    #     # Create filename with ticker + date
-    #     today = datetime.date.today().strftime("%Y-%m-%d")
-    #     filename = f"testing_results/predictions/{ticker}_{today}.csv"
-    #
-    #     # Build a DataFrame for readability
-    #     df_pred = pd.DataFrame({
-    #         "Predicted_Class": y_pred_class,
-    #     })
-    #
-    #     # Add predicted probabilities for each class
-    #     for i in range(y_pred_prob.shape[1]):
-    #         df_pred[f"Prob_Class_{i}"] = y_pred_prob[:, i]
-    #
-    #     # Save to CSV
-    #     df_pred.to_csv(filename, index=False)
-    #     print(f"✅ Saved LSTM predictions to {filename}")
-    #
-    #
-    # def save_xgb_prediction(self, ticker, y_pred_class):
-    #     # Create folder if it doesn't exist
-    #     os.makedirs("testing_results/predictions", exist_ok=True)
-    #
-    #     # Create filename using ticker + date
-    #     today = datetime.date.today().strftime("%Y-%m-%d")
-    #     filename = f"testing_results/predictions/{ticker}_{today}.csv"
-    #
-    #     # Save only the class predictions
-    #     df_pred = pd.DataFrame({"Predicted_Class": y_pred_class})
-    #     df_pred.to_csv(filename, index=False)
-    #
-    #     print(f"✅ Saved XGBoost predictions to {filename}")
-
