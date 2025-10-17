@@ -7,10 +7,6 @@ class ModelLoader():
         self.ticker = ticker
 
     def load_model(self):
-        model_path = f"models/{self.model_type}_model_{self.ticker}.h5"
-        try:
-            model = tf.keras.models.load_model(model_path, compile=False)
-        except TypeError:
-            # Fallback: load without validation
-            model = tf.keras.models.load_model(model_path, compile=False, safe_mode=False)
+        model_path = f"models/lstm_model_{self.ticker}"
+        model = tf.keras.models.load_model(model_path)
         return model
