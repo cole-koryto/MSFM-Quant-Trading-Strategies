@@ -1,0 +1,3 @@
+- pull 100 tickers for equity (NASDAQ 100)
+- strategy backtest
+- 
