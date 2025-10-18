@@ -27,24 +27,30 @@ class Backtester():
 
         return df_preds
     
-    def generate_backtest_data(self, data):
+    def calculate_portfolio_returns(self, data):
         if self.strategy == "dollar-neutral":
             strategy = Dollar_Neutral(data)
             backtest_data = strategy.calculate_weights()
-            backtest_data = strategy.calculate_initial_position_size(self.initial_value)
 
-            print(backtest_data.head(10))
-            print(backtest_data["position"].value_counts())
-            print(backtest_data["position_value"].head(10))
+            # Multiply position * weight * return per ticker
+            backtest_data["contribution"] = backtest_data["position"] * backtest_data["weight"] * backtest_data["return"]
+            
+            # Sum contributions across tickers for each date
+            portfolio_returns = backtest_data.groupby(backtest_data.index)["contribution"].sum()
 
-        else:
-            backtest_data = data  # fallback if no strategy
+            return portfolio_returns
 
-        return backtest_data
     
     def calculate_portfolio_value(self, data):
 
-        portfolio_value = pd.Series(self.initial_value, index=data.index.unique())
+        portfolio_value = pd.Series(index=data.index.unique())
+
+        # Calculate longs and shorts
+        longs_initial_value = data.loc[(data.index == 0) & (data["position"] == 1), "position_value"].sum()
+        shorts_initial_value = data.loc[(data.index == 0) & (data["position"] == -1), "position_value"].sum()
+
+        # Assign portfolio value
+        portfolio_value.loc[0] = longs_initial_value + abs(shorts_initial_value)
 
         dates = data.index.unique()
         for i in range(1, len(dates)):
@@ -114,12 +120,12 @@ class Backtester():
     def backtest(self):
 
         data = self.combine_ticker_dfs()
-        backtest_data = self.generate_backtest_data(data)
-        portfolio_value = self.calculate_portfolio_value(backtest_data)
+        portfolio_returns = self.calculate_portfolio_returns(data)
+        initial_value = self.initial_value
+        portfolio_value = initial_value * (1 + portfolio_returns).cumprod()
         portfolio_metrics = self.calculate_portfolio_metrics(portfolio_value)
         
         return {
             "portfolio_value": portfolio_value,
-            "backtest_data": backtest_data,
             "portfolio_metrics": portfolio_metrics
         }
