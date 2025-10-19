@@ -39,47 +39,6 @@ class Backtester():
             portfolio_returns = backtest_data.groupby(backtest_data.index)["contribution"].sum()
 
             return portfolio_returns
-
-    
-    def calculate_portfolio_value(self, data):
-
-        portfolio_value = pd.Series(index=data.index.unique())
-
-        # Calculate longs and shorts
-        longs_initial_value = data.loc[(data.index == 0) & (data["position"] == 1), "position_value"].sum()
-        shorts_initial_value = data.loc[(data.index == 0) & (data["position"] == -1), "position_value"].sum()
-
-        # Assign portfolio value
-        portfolio_value.loc[0] = longs_initial_value + abs(shorts_initial_value)
-
-        dates = data.index.unique()
-        for i in range(1, len(dates)):
-            idx = dates[i]
-            prev_date = dates[i - 1]
-
-            curr_slice = data.loc[idx].copy()
-            prev_slice = data.loc[prev_date].copy()
-
-            for ticker in curr_slice["ticker"]:
-                # Safely get previous position_value
-                prev_pos = prev_slice.loc[prev_slice["ticker"] == ticker, "position_value"]
-                prev_pos_value = prev_pos.iloc[0] if not prev_pos.empty else 0
-
-                # Safely get current return
-                curr_ret = curr_slice.loc[curr_slice["ticker"] == ticker, "return"]
-                curr_ret_value = curr_ret.iloc[0] if not curr_ret.empty else 0
-
-                # Update position_value
-                data.loc[(data.index == idx) & (data["ticker"] == ticker), "position_value"] = prev_pos_value * (1 + curr_ret_value)
-
-            # Calculate longs and shorts
-            longs_value = data.loc[(data.index == idx) & (data["position"] == 1), "position_value"].sum()
-            shorts_value = data.loc[(data.index == idx) & (data["position"] == -1), "position_value"].sum()
-
-            # Assign portfolio value
-            portfolio_value.loc[idx] = longs_value + abs(shorts_value)
-
-        return portfolio_value
     
     def calculate_portfolio_metrics(self, data):
         
@@ -98,10 +57,50 @@ class Backtester():
         # Skewness
         skewness = stats.skew(returns)
 
-        # Max drawdown
-        cummax = data.cummax()
-        drawdown = (data - cummax) / cummax
-        max_drawdown = drawdown.min()
+        # Drawdown and stats (max, bottom date, peak date, recovery date, and duration to recovery)
+        def compute_drawdown_stats(returns):
+            cum_rets = (1 + returns).cumprod()
+            rolling_max = cum_rets.cummax()
+            drawdown = (cum_rets - rolling_max) / rolling_max
+
+            # Compute drawdown stats
+            max_dd = drawdown.min()
+            bottom_date = drawdown.idxmin()
+            peak_date = returns.loc[:bottom_date].idxmax()
+            recovery_date = drawdown.loc[bottom_date:].gt(-1e-6).idxmax()
+            
+            if isinstance(recovery_date, (float, np.floating)):  # if not found
+                recovery_date = pd.NaT
+
+            duration = recovery_date - peak_date if pd.notna(recovery_date) else pd.NaT
+            
+            # Create DataFrame for display
+            stats = pd.DataFrame([{
+                'Max Drawdown': max_dd,
+                'Peak': peak_date,
+                'Bottom': bottom_date,
+                'Recover': recovery_date,
+                'Duration (to Recover)': duration
+            }])
+
+            # Format it like your example
+            formatted = stats.assign(
+                **{
+                    'Max Drawdown': stats['Max Drawdown'].map('{:.2%}'.format),
+                    'Peak': stats['Peak'].apply(lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) else ''),
+                    'Bottom': stats['Bottom'].apply(lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) else ''),
+                    'Recover': stats['Recover'].apply(lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) else ''),
+                    'Duration (to Recover)': stats['Duration (to Recover)'].apply(
+                        lambda x: f'{x.days:,} days' if pd.notna(x) else ''
+                    )
+                }
+            ).T
+
+            formatted.columns = ['Value']
+
+            return drawdown, formatted
+        
+        drawdown, drawdown_stats = compute_drawdown_stats(returns)
         
         # Value at Risk (VaR) - 5% quantile
         var_05 = returns.quantile(0.05)
@@ -111,7 +110,9 @@ class Backtester():
             "Volatility": volatility,
             "Sharpe Ratio": sharpe,
             "Skewness": skewness,
-            "Max Drawdown": max_drawdown,
+            "Drawdown (Time Series)": drawdown,
+            "Drawdown (Stats)": drawdown_stats,
+            "Max Drawdown": drawdown.min(),
             "VaR (5%)": var_05
         }
     
