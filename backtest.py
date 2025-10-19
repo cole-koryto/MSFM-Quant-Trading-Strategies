@@ -1,8 +1,13 @@
 import pandas as pd
 import matplotlib.pyplot as plt
+from datetime import datetime, timedelta
 from backtester import Backtester
+from price_loader import PriceLoader
 
 ticker_list = ["6EZ25.CME", "6JZ25.CME", "ZWZ25.CBT"]
+
+loader = PriceLoader(ticker_list)
+loader.save_to_parquet((datetime.now() - timedelta(days=5*365)).strftime("%Y-%m-%d"), datetime.now().strftime("%Y-%m-%d"))
 
 backtester = Backtester(ticker_list, "xgb", "dollar-neutral", 1_000_000)
 
