@@ -1,0 +1,321 @@
+import datetime
+import json
+import os
+import pprint
+
+import optuna
+from optuna.pruners import MedianPruner
+from optuna.samplers import TPESampler
+import xgboost as xgb
+from sklearn.model_selection import TimeSeriesSplit, cross_val_score
+
+import pandas as pd
+import numpy as np
+from matplotlib import pyplot as plt
+from sklearn.model_selection import GridSearchCV, TimeSeriesSplit, RandomizedSearchCV
+from sklearn.metrics import (
+    accuracy_score,
+    classification_report,
+    confusion_matrix,
+    ConfusionMatrixDisplay
+)
+from xgboost import XGBClassifier
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
+
+class PanelForecaster:
+    def __init__(self, ticker_list, model_name):
+        self.x_train = None
+        self.x_test = None
+        self.y_train = None
+        self.y_test = None
+        self.__NUM_CLASSES = 5
+        self.ticker_list = ticker_list
+        self.model_name = model_name
+
+        print("Loading data...")
+
+        ticker_df_list = []
+
+        for ticker in self.ticker_list:
+            ticker_data_df = pd.read_parquet(f"./data/{ticker}.parquet")
+            ticker_data_df.insert(0, "ticker", ticker)
+            ticker_df_list.append(ticker_data_df)
+            
+        print("Merging data...")
+        self.data_df = pd.concat(ticker_df_list, join='inner')
+        print("Data merged...")
+
+        self.data_df.to_csv(f"./data/{model_name}")
+
+    def run_XGBoost(self, lags):
+        # Gathers  data
+        self.generate_data(lags)
+
+        # Load best params
+        with open(f"models/xgb_best_params_{self.model_name}.json", "r") as f:
+            best_params = json.load(f)
+
+        # Build model with best params
+        model = XGBClassifier(
+            **best_params,  # unpack tuned params
+            objective='multi:softprob',
+            num_class=5,
+            tree_method='hist',
+            eval_metric='mlogloss',
+            random_state=25,
+            n_jobs=-1
+        )
+
+        # Train on full data
+        model.fit(self.x_train, self.y_train)
+
+        # Save model
+        os.makedirs("models", exist_ok=True)
+        model.save_model(f"models/xgb_model_{self.model_name}.json")
+
+        metadata = {
+            "lags": lags,
+            "features": list(self.x_train.columns),
+            "model_type": "XGBRegressor"
+        }
+
+        with open(f"models/xgb_metadata_{self.model_name}.json", "w") as f:
+            json.dump(metadata, f)
+
+
+    def build_XGBoost(self, x_train, y_train):
+        """Build and optimize XGBoost using Optuna."""
+        
+        # Drop non-numeric columns from x_train
+        x_train = self.x_train.drop(['ticker'], axis=1)
+
+        tscv = TimeSeriesSplit(n_splits=5)
+        
+        def objective(trial):
+            """Objective function for Optuna."""
+            params = {
+                'n_estimators': trial.suggest_categorical('n_estimators', [200, 300]),
+                'max_depth': trial.suggest_categorical('max_depth', [5, 6]),
+                'learning_rate': trial.suggest_categorical('learning_rate', [0.05, 0.1]),
+                'subsample': trial.suggest_categorical('subsample', [0.4, 0.5]),
+                'colsample_bytree': trial.suggest_categorical('colsample_bytree', [0.8]),
+                'min_child_weight': trial.suggest_categorical('min_child_weight', [5, 10]),
+                'gamma': trial.suggest_categorical('gamma', [0.1, 0.2]),
+                'reg_lambda': trial.suggest_categorical('reg_lambda', [10, 15]),
+            }
+            
+            model = xgb.XGBClassifier(
+                objective='multi:softprob',
+                num_class=5,
+                tree_method='hist',
+                eval_metric='mlogloss',
+                random_state=25,
+                n_jobs=1,
+                **params
+            )
+            
+            # Cross-validate with TimeSeriesSplit
+            scores = cross_val_score(model, x_train, y_train, cv=tscv, scoring='accuracy', n_jobs=1)
+            return scores.mean()
+        
+        # Create study and optimize
+        sampler = TPESampler(seed=25)
+        pruner = MedianPruner()
+        
+        study = optuna.create_study(
+            direction='maximize',
+            sampler=sampler,
+            pruner=pruner
+        )
+        
+        study.optimize(objective, n_trials=20, show_progress_bar=True)
+        
+        # Get best parameters
+        best_params = study.best_params
+        print(f"Best Hyperparameters: {best_params}")
+        print(f"Best CV Accuracy: {study.best_value:.4f}")
+        
+        # Save to JSON file
+        os.makedirs("models", exist_ok=True)
+        with open(f"models/xgb_best_params_{self.model_name}.json", "w") as f:
+            json.dump(best_params, f, indent=4)
+        
+        # Train final model with best parameters
+        final_model = xgb.XGBClassifier(
+            objective='multi:softprob',
+            num_class=5,
+            tree_method='hist',
+            eval_metric='mlogloss',
+            random_state=25,
+            n_jobs=1,
+            **best_params
+        )
+        final_model.fit(x_train, y_train)
+        
+        return final_model, best_params
+
+
+    # In your test_XGBoost method:
+    def test_XGBoost(self, lags, test_share):
+        # Gathers test data
+        self.generate_data(lags, test_share)
+
+        # Build and optimize model with Optuna
+        model, best_params = self.build_XGBoost(self.x_train, self.y_train)
+        
+        # Predict on test set
+        y_pred = model.predict(self.x_test)
+        self.XGBoost_output_test_metrics(y_pred, "XGBoost")
+
+
+    def generate_data(self, lags, test_share=None):
+        # Creates modeling df
+        df = self.data_df.copy()
+
+        def expanding_quantiles(x):
+            q = self.__NUM_CLASSES
+            result = pd.Series(index=x.index, dtype=int)
+            for i in range(len(x)):
+                # Only take values up to current point
+                subset = x.iloc[:i+1]
+                result.iloc[i] = pd.qcut(subset, q=q, labels=False, duplicates='drop')[-1]
+            return result
+            
+        # Creates return quantiles within each ticker
+        df['quantile'] = df.groupby('ticker')['return'].transform(lambda x: expanding_quantiles(x))
+
+        # Create lag features
+        for i in range(1, lags + 1):
+            # Lag for quantiles within each ticker
+            df[f'quantile_lag_{i}'] = df.groupby('ticker')['quantile'].shift(i)
+            
+            # Lag for returns within each ticker
+            df[f'return_lag_{i}'] = df.groupby('ticker')['return'].shift(i)
+
+        # One-day ahead target
+        df['target_1d'] = df.groupby('ticker')['quantile'].shift(-1)
+
+        # Add 2-day, 3-day, and 5-day moving averages for returns
+        windows = [2, 3, 5, 10, 21]
+
+        for window in windows:
+            df[f'MA_{window}_ret'] = df.groupby('ticker')['return'].transform(
+                lambda x: x.rolling(window=window, min_periods=1).mean()
+            )
+            df[f'MA_{window}_q'] = df.groupby('ticker')['quantile'].transform(
+                lambda x: x.rolling(window=window, min_periods=1).mean()
+            )
+            df[f'mom_{window}d'] = df.groupby('ticker')['return'].transform(
+                lambda x: x.rolling(window=window).sum()
+            )
+            df[f'vol_{window}d'] = df.groupby('ticker')['return'].transform(
+                lambda x: x.rolling(window=window).std()
+            )
+            
+        # Daily z-score of return and volatility across tickers
+        df['cross_z_ret'] = df.groupby(level=0)['return'].transform(lambda x: (x - x.mean()) / x.std())
+        df['cross_z_vol'] = df.groupby(level=0)['vol_21d'].transform(lambda x: (x - x.mean()) / x.std())    
+
+        # Drop NaNs created by shifting
+        df.dropna(inplace=True)
+
+        y = df['target_1d']
+        X = df.drop('target_1d', axis=1)
+        
+        def time_based_split(X, y, test_share=0.2):
+            """
+            Split X and y into train/test sets by ticker and time.
+            The last `test_share` fraction of each ticker’s data goes to test.
+            """
+            x_train_list, x_test_list = [], []
+            y_train_list, y_test_list = [], []
+
+            for ticker, group in X.groupby('ticker'):
+                print(f"Processing {ticker}...") 
+                idx = group.index
+                n = len(idx)
+                if n < 2:
+                    # Too few observations, skip test split
+                    train_idx = idx
+                    test_idx = []
+                else:
+                    split_point = int(n * (1 - test_share))
+                    train_idx = idx[:split_point]
+                    test_idx = idx[split_point:]
+
+                x_train_list.append(X.loc[train_idx])
+                y_train_list.append(y.loc[train_idx])
+                if len(test_idx) > 0:
+                    x_test_list.append(X.loc[test_idx])
+                    y_test_list.append(y.loc[test_idx])
+
+            # Combine all tickers’ splits
+            x_train = pd.concat(x_train_list)
+            y_train = pd.concat(y_train_list)
+            x_test = pd.concat(x_test_list) if x_test_list else None
+            y_test = pd.concat(y_test_list) if y_test_list else None
+
+            return x_train, x_test, y_train, y_test
+
+        # Train/test split if needed
+        if test_share:
+            self.x_train, self.x_test, self.y_train, self.y_test = time_based_split(X, y, test_share)
+        else:
+            self.x_train, self.y_train = X, y
+            self.x_test = self.y_test = None
+
+
+    def XGBoost_output_test_metrics(self, y_pred, model_name):
+        # Accuracy
+        acc = accuracy_score(self.y_test, y_pred)
+        print(f"Accuracy: {acc:.3f}")
+
+        # Detailed classification report
+        print("\nClassification Report:")
+        report = classification_report(self.y_test, y_pred, digits=3)
+        print(report)
+
+        # Confusion matrix
+        # cm = confusion_matrix(self.y_test, y_pred)
+        # disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=[1, 2, 3, 4, 5])
+        # disp.plot(cmap="Blues")
+        # plt.title("Confusion Matrix (Quantile Classifier)")
+        # plt.show()
+
+        cm = confusion_matrix(self.y_test, y_pred)
+        classes = np.unique(self.y_test)  # [0, 1, 2, 3]
+        disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=classes)
+        disp.plot(cmap="Blues")
+        plt.title("Confusion Matrix (Quantile Classifier)")
+        plt.show()
+
+        # Plot actual vs predicted
+        plt.figure(figsize=(12, 6))
+        plt.plot(self.y_train.index, self.y_train, label='Training Actual')
+        plt.plot(self.y_test.index, self.y_test, label='Testing Actual')
+        plt.plot(self.y_test.index, y_pred, label='Predicted')
+        plt.title('Return Quantile Prediction')
+        plt.xlabel('Date')
+        plt.ylabel('Return Quantile')
+        plt.legend()
+        plt.grid(True)
+        plt.show()
+
+        # Create results folder and file
+        results_folder = "testing_results"
+        os.makedirs(results_folder, exist_ok=True)
+
+        # Save output to file
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        filename = os.path.join(results_folder, f"{model_name}_test_results_{self.ticker}_{timestamp}.txt")
+        with open(filename, "w") as f:
+            f.write(f"{model_name} Quantile Classifier Testing Results\n")
+            f.write("========================================\n\n")
+            f.write(f"Date/Time: {timestamp}\n")
+            f.write(f"Accuracy: {acc:.4f}\n\n")
+            f.write("Classification Report:\n")
+            f.write(report)
+            f.write("\nConfusion Matrix:\n")
+            f.write(np.array2string(cm, separator=', '))
+            f.write("\n")
+        print(f"✅ Testing results saved to: {filename}")

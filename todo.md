@@ -9,7 +9,7 @@
 * Save date in readable format and print last date
 
 ## Adith (PM)
-* Construct Portfolio Allocation & Forward to Jonny
+- [ ] C
 
 ## Jonny (Trader)
 * Submit Trading Decisions on CQGOne and Bloomberg
@@ -25,4 +25,4 @@
 - [ x ] Assign trading signals based on model predictions (`1`, `-1`, `0`)  
 - [ x ] Implement a **real backtest**:
   - [ x ] Use signals to compute compound returns (`(1 + ret * signal)`)  
-- [ ] Plot total return as a time series graph  
+- [ x ] Plot total return as a time series graph  

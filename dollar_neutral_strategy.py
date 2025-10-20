@@ -38,28 +38,3 @@ class Dollar_Neutral(Strategy):
                 ) * date_slice.loc[shorts, "position"]
 
         return backtest_df
-    
-    def calculate_initial_position_size(self, initial_value):
-
-        data = self.data.copy()
-
-        initial_longs_value = initial_value / 2
-        initial_shorts_value = initial_value / 2
-
-        # Find the first date that has at least one long and one short
-        non_zero_positions = data[data["position"].isin([1, -1])]
-        if non_zero_positions.empty:
-            raise ValueError("No positions found in data to initialize.")
-
-        first_active_date = non_zero_positions.index[0]
-
-        # Masks for the first active date
-        first_date_mask = data.index == first_active_date
-        longs_mask = first_date_mask & (data["position"] == 1)
-        shorts_mask = first_date_mask & (data["position"] == -1)
-
-        # Assign initial position values
-        data.loc[longs_mask, "position_value"] = initial_longs_value * data.loc[longs_mask, "weight"]
-        data.loc[shorts_mask, "position_value"] = initial_shorts_value * data.loc[shorts_mask, "weight"]
-    
-        return data
