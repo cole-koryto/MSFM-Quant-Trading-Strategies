@@ -7,6 +7,7 @@ import optuna
 from optuna.pruners import MedianPruner
 from optuna.samplers import TPESampler
 import xgboost as xgb
+import lightgbm as lgb
 from sklearn.model_selection import TimeSeriesSplit, cross_val_score
 
 import pandas as pd
@@ -47,52 +48,15 @@ class PanelForecaster:
 
         self.data_df.to_csv(f"./data/{model_name}")
 
-    def run_XGBoost(self, lags):
-        # Gathers  data
-        self.generate_data(lags)
+    def build_LightGBM(self, x_train, y_train):
+        """Build and optimize LightGBM using Optuna with TimeSeriesSplit."""
 
-        # Load best params
-        with open(f"models/xgb_best_params_{self.model_name}.json", "r") as f:
-            best_params = json.load(f)
-
-        # Build model with best params
-        model = XGBClassifier(
-            **best_params,  # unpack tuned params
-            objective='multi:softprob',
-            num_class=5,
-            tree_method='hist',
-            eval_metric='mlogloss',
-            random_state=25,
-            n_jobs=-1
-        )
-
-        # Train on full data
-        model.fit(self.x_train, self.y_train)
-
-        # Save model
-        os.makedirs("models", exist_ok=True)
-        model.save_model(f"models/xgb_model_{self.model_name}.json")
-
-        metadata = {
-            "lags": lags,
-            "features": list(self.x_train.columns),
-            "model_type": "XGBRegressor"
-        }
-
-        with open(f"models/xgb_metadata_{self.model_name}.json", "w") as f:
-            json.dump(metadata, f)
-
-
-    def build_XGBoost(self, x_train, y_train):
-        """Build and optimize XGBoost using Optuna."""
-        
-        # Drop non-numeric columns from x_train
+        # Drop non-numeric columns
         x_train = self.x_train.drop(['ticker'], axis=1)
+        tscv = TimeSeriesSplit(n_splits=3)
 
-        tscv = TimeSeriesSplit(n_splits=5)
-        
         def objective(trial):
-            """Objective function for Optuna."""
+            """Objective function for Optuna hyperparameter optimization."""
             params = {
                 'n_estimators': trial.suggest_categorical('n_estimators', [200, 300]),
                 'max_depth': trial.suggest_categorical('max_depth', [5, 6]),
@@ -100,72 +64,124 @@ class PanelForecaster:
                 'subsample': trial.suggest_categorical('subsample', [0.4, 0.5]),
                 'colsample_bytree': trial.suggest_categorical('colsample_bytree', [0.8]),
                 'min_child_weight': trial.suggest_categorical('min_child_weight', [5, 10]),
-                'gamma': trial.suggest_categorical('gamma', [0.1, 0.2]),
-                'reg_lambda': trial.suggest_categorical('reg_lambda', [10, 15]),
+                'lambda_l1': trial.suggest_categorical('lambda_l1', [0.1, 0.2]),
+                'lambda_l2': trial.suggest_categorical('lambda_l2', [10, 15]),
             }
-            
-            model = xgb.XGBClassifier(
-                objective='multi:softprob',
+
+            model = lgb.LGBMClassifier(
                 num_class=5,
-                tree_method='hist',
-                eval_metric='mlogloss',
+                objective='multiclass',
+                metric='multi_logloss',
                 random_state=25,
-                n_jobs=1,
+                n_jobs=-1,
+                verbose=-1,
                 **params
             )
-            
+
             # Cross-validate with TimeSeriesSplit
-            scores = cross_val_score(model, x_train, y_train, cv=tscv, scoring='accuracy', n_jobs=1)
+            scores = cross_val_score(model, x_train, y_train, cv=tscv, 
+                                    scoring='accuracy', n_jobs=-1)
             return scores.mean()
-        
+
         # Create study and optimize
         sampler = TPESampler(seed=25)
         pruner = MedianPruner()
-        
+
         study = optuna.create_study(
             direction='maximize',
             sampler=sampler,
             pruner=pruner
         )
-        
+
         study.optimize(objective, n_trials=20, show_progress_bar=True)
-        
+
         # Get best parameters
         best_params = study.best_params
         print(f"Best Hyperparameters: {best_params}")
         print(f"Best CV Accuracy: {study.best_value:.4f}")
-        
-        # Save to JSON file
+
+        # Save best parameters
         os.makedirs("models", exist_ok=True)
-        with open(f"models/xgb_best_params_{self.model_name}.json", "w") as f:
+        with open(f"models/lgb_best_params_{self.model_name}.json", "w") as f:
             json.dump(best_params, f, indent=4)
-        
+
         # Train final model with best parameters
-        final_model = xgb.XGBClassifier(
-            objective='multi:softprob',
+        final_model = lgb.LGBMClassifier(
             num_class=5,
-            tree_method='hist',
-            eval_metric='mlogloss',
+            objective='multiclass',
+            metric='multi_logloss',
             random_state=25,
-            n_jobs=1,
+            n_jobs=-1,
+            verbose=-1,
             **best_params
         )
         final_model.fit(x_train, y_train)
-        
+
         return final_model, best_params
 
 
-    # In your test_XGBoost method:
-    def test_XGBoost(self, lags, test_share):
-        # Gathers test data
+    def test_LightGBM(self, lags, test_share):
+        """Build, optimize, and test LightGBM model."""
+        # Generate train/test data
         self.generate_data(lags, test_share)
 
         # Build and optimize model with Optuna
-        model, best_params = self.build_XGBoost(self.x_train, self.y_train)
-        
+        model, best_params = self.build_LightGBM(self.x_train, self.y_train)
+
         # Predict on test set
         y_pred = model.predict(self.x_test)
-        self.XGBoost_output_test_metrics(y_pred, "XGBoost")
+        
+        # Output metrics
+        self.LightGBM_output_test_metrics(y_pred, "LightGBM")
+
+
+    def run_LightGBM(self, lags):
+        """Load best params and train final production model."""
+        import lightgbm as lgb
+        import json
+        import os
+
+        # Generate data
+        self.generate_data(lags)
+
+        # Load best parameters from previous optimization
+        with open(f"models/lgb_best_params_{self.model_name}.json", "r") as f:
+            best_params = json.load(f)
+
+        # Prepare data (drop non-numeric columns)
+        x_train = self.x_train.drop(['ticker'], axis=1)
+
+        # Build model with best parameters
+        model = lgb.LGBMClassifier(
+            num_class=5,
+            objective='multiclass',
+            metric='multi_logloss',
+            random_state=25,
+            n_jobs=-1,
+            verbose=-1,
+            **best_params
+        )
+
+        # Train on full dataset
+        model.fit(x_train, self.y_train)
+
+        # Save trained model
+        os.makedirs("models", exist_ok=True)
+        model.booster_.save_model(f"models/lgb_model_{self.model_name}.txt")
+
+        # Save metadata
+        metadata = {
+            "lags": lags,
+            "features": list(x_train.columns),
+            "model_type": "LGBMClassifier",
+            "best_params": best_params
+        }
+
+        with open(f"models/lgb_metadata_{self.model_name}.json", "w") as f:
+            json.dump(metadata, f, indent=4)
+
+        print(f"Model trained and saved: models/lgb_model_{self.model_name}.txt")
+        return model
 
 
     def generate_data(self, lags, test_share=None):
