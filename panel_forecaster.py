@@ -48,99 +48,127 @@ class PanelForecaster:
 
         self.data_df.to_csv(f"./data/{model_name}")
 
-    def build_LightGBM(self, x_train, y_train):
-        """Build and optimize LightGBM using Optuna with TimeSeriesSplit."""
+    def build_LightGBM(self, x_train, y_train, x_valid, y_valid):
+        """Build and optimize LightGBM using Optuna with train/validation split."""
 
-        # Drop non-numeric columns
-        x_train = self.x_train.drop(['ticker'], axis=1)
-        tscv = TimeSeriesSplit(n_splits=3)
+        # Drop non-numeric columns from passed data (not self.x_train)
+        x_train = x_train.drop(['ticker'], axis=1)
+        x_valid = x_valid.drop(['ticker'], axis=1)
 
         def objective(trial):
             """Objective function for Optuna hyperparameter optimization."""
             params = {
-                'n_estimators': trial.suggest_categorical('n_estimators', [200, 300]),
-                'max_depth': trial.suggest_categorical('max_depth', [5, 6]),
-                'learning_rate': trial.suggest_categorical('learning_rate', [0.05, 0.1]),
-                'subsample': trial.suggest_categorical('subsample', [0.4, 0.5]),
-                'colsample_bytree': trial.suggest_categorical('colsample_bytree', [0.8]),
-                'min_child_weight': trial.suggest_categorical('min_child_weight', [5, 10]),
-                'lambda_l1': trial.suggest_categorical('lambda_l1', [0.1, 0.2]),
-                'lambda_l2': trial.suggest_categorical('lambda_l2', [10, 15]),
+                'objective': 'multiclass',
+                'num_class': 5,
+                'metric': 'multi_logloss',
+                'boosting_type': 'gbdt',
+                'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.2, log=True),
+                'num_leaves': trial.suggest_int('num_leaves', 20, 150),
+                'max_depth': trial.suggest_int('max_depth', 3, 10),
+                'min_data_in_leaf': trial.suggest_int('min_data_in_leaf', 10, 100),
+                'feature_fraction': trial.suggest_float('feature_fraction', 0.6, 1.0),
+                'bagging_fraction': trial.suggest_float('bagging_fraction', 0.6, 1.0),
+                'bagging_freq': trial.suggest_int('bagging_freq', 1, 5),
+                'lambda_l1': trial.suggest_float('lambda_l1', 1e-8, 10.0, log=True),
+                'lambda_l2': trial.suggest_float('lambda_l2', 1e-8, 10.0, log=True),
+                'num_threads': 4,
             }
 
-            model = lgb.LGBMClassifier(
-                num_class=5,
-                objective='multiclass',
-                metric='multi_logloss',
-                random_state=25,
-                n_jobs=-1,
-                verbose=-1,
-                **params
+            train_set = lgb.Dataset(x_train, label=y_train)
+            valid_set = lgb.Dataset(x_valid, label=y_valid)
+
+            model = lgb.train(
+                params,
+                train_set,
+                valid_sets=[valid_set],
+                num_boost_round=1000,
+                callbacks=[
+                    lgb.early_stopping(50),
+                    lgb.log_evaluation(period=0)
+                ]
             )
 
-            # Cross-validate with TimeSeriesSplit
-            scores = cross_val_score(model, x_train, y_train, cv=tscv, 
-                                    scoring='accuracy', n_jobs=-1)
-            return scores.mean()
+            preds = model.predict(x_valid)
+            preds_labels = preds.argmax(axis=1)
+            acc = accuracy_score(y_valid, preds_labels)
+            
+            return 1.0 - acc  # minimize error
 
         # Create study and optimize
         sampler = TPESampler(seed=25)
         pruner = MedianPruner()
 
         study = optuna.create_study(
-            direction='maximize',
+            direction='minimize',
             sampler=sampler,
             pruner=pruner
         )
 
-        study.optimize(objective, n_trials=20, show_progress_bar=True)
+        study.optimize(objective, n_trials=50, show_progress_bar=True)
 
         # Get best parameters
         best_params = study.best_params
-        print(f"Best Hyperparameters: {best_params}")
-        print(f"Best CV Accuracy: {study.best_value:.4f}")
+        print(f"Best Accuracy: {1 - study.best_value:.4f}")
+        print(f"Best Parameters: {best_params}")
 
         # Save best parameters
         os.makedirs("models", exist_ok=True)
         with open(f"models/lgb_best_params_{self.model_name}.json", "w") as f:
             json.dump(best_params, f, indent=4)
 
-        # Train final model with best parameters
-        final_model = lgb.LGBMClassifier(
-            num_class=5,
-            objective='multiclass',
-            metric='multi_logloss',
-            random_state=25,
-            n_jobs=-1,
-            verbose=-1,
+        # Train final model with best parameters on full training data
+        train_set = lgb.Dataset(x_train, label=y_train)
+        
+        final_params = {
+            'objective': 'multiclass',
+            'num_class': 5,
+            'metric': 'multi_logloss',
+            'boosting_type': 'gbdt',
+            'num_threads': 4,
             **best_params
+        }
+
+        final_model = lgb.train(
+            final_params,
+            train_set,
+            num_boost_round=1000,
+            callbacks=[
+                lgb.log_evaluation(period=0)
+            ]
         )
-        final_model.fit(x_train, y_train)
 
         return final_model, best_params
 
 
     def test_LightGBM(self, lags, test_share):
         """Build, optimize, and test LightGBM model."""
+
         # Generate train/test data
         self.generate_data(lags, test_share)
 
+        # Create validation split from training data
+        x_train, x_valid, y_train, y_valid = train_test_split(
+            self.x_train, self.y_train, test_size=0.2, random_state=25, stratify=self.y_train
+        )
+
         # Build and optimize model with Optuna
-        model, best_params = self.build_LightGBM(self.x_train, self.y_train)
+        model, best_params = self.build_LightGBM(x_train, y_train, x_valid, y_valid)
+
+        # Prepare test data
+        x_test = self.x_test.drop(['ticker'], axis=1)
 
         # Predict on test set
-        y_pred = model.predict(self.x_test)
-        
+        preds = model.predict(x_test)
+        y_pred = preds.argmax(axis=1)
+
         # Output metrics
+        acc = accuracy_score(self.y_test, y_pred)
+        print(f"Test Accuracy: {acc:.4f}")
         self.LightGBM_output_test_metrics(y_pred, "LightGBM")
 
 
     def run_LightGBM(self, lags):
         """Load best params and train final production model."""
-        import lightgbm as lgb
-        import json
-        import os
-
         # Generate data
         self.generate_data(lags)
 
@@ -151,29 +179,36 @@ class PanelForecaster:
         # Prepare data (drop non-numeric columns)
         x_train = self.x_train.drop(['ticker'], axis=1)
 
-        # Build model with best parameters
-        model = lgb.LGBMClassifier(
-            num_class=5,
-            objective='multiclass',
-            metric='multi_logloss',
-            random_state=25,
-            n_jobs=-1,
-            verbose=-1,
-            **best_params
-        )
+        # Build and train model with best parameters
+        train_set = lgb.Dataset(x_train, label=self.y_train)
 
-        # Train on full dataset
-        model.fit(x_train, self.y_train)
+        final_params = {
+            'objective': 'multiclass',
+            'num_class': 5,
+            'metric': 'multi_logloss',
+            'boosting_type': 'gbdt',
+            'num_threads': 4,
+            **best_params
+        }
+
+        model = lgb.train(
+            final_params,
+            train_set,
+            num_boost_round=1000,
+            callbacks=[
+                lgb.log_evaluation(period=0)
+            ]
+        )
 
         # Save trained model
         os.makedirs("models", exist_ok=True)
-        model.booster_.save_model(f"models/lgb_model_{self.model_name}.txt")
+        model.save_model(f"models/lgb_model_{self.model_name}.txt")
 
         # Save metadata
         metadata = {
             "lags": lags,
             "features": list(x_train.columns),
-            "model_type": "LGBMClassifier",
+            "model_type": "LGBMBooster",
             "best_params": best_params
         }
 
@@ -281,7 +316,7 @@ class PanelForecaster:
             self.x_test = self.y_test = None
 
 
-    def XGBoost_output_test_metrics(self, y_pred, model_name):
+    def output_test_metrics(self, y_pred, model_name):
         # Accuracy
         acc = accuracy_score(self.y_test, y_pred)
         print(f"Accuracy: {acc:.3f}")

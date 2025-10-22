@@ -9,8 +9,8 @@ def main():
     # tickers = ["6EZ25.CME", "6JZ25.CME", "ZWZ25.CBT"]
     tickers = get_nasdaq_100()
 
-    loader = PriceLoader(tickers)
-    loader.save_to_parquet((datetime.now() - timedelta(days=5*365)).strftime("%Y-%m-%d"), datetime.now().strftime("%Y-%m-%d"))
+    # loader = PriceLoader(tickers)
+    # loader.save_to_parquet((datetime.now() - timedelta(days=5*365)).strftime("%Y-%m-%d"), datetime.now().strftime("%Y-%m-%d"))
 
     # for ticker in tickers:
     #     forecaster = Forecaster(ticker=ticker)
