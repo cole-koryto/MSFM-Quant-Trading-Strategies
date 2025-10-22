@@ -1,8 +1,6 @@
 import datetime
 import json
 import os
-import pprint
-
 import pandas as pd
 import numpy as np
 from matplotlib import pyplot as plt
@@ -130,12 +128,6 @@ class Forecaster:
     def build_LSTM_model(self, lookback):
         # Build LSTM Model
         num_features = self.x_train.shape[1]
-
-        # model = Sequential()
-        # model.add(Input(shape=(lookback, num_features)))
-        # model.add(LSTM(units=50))
-        # model.add(Dense(self.__NUM_CLASSES, activation='softmax'))
-
         model = Sequential()
         model.add(Input(shape=(lookback, num_features)))
         model.add(LSTM(50, return_sequences=True))
@@ -355,7 +347,7 @@ class Forecaster:
             f.write("\nConfusion Matrix:\n")
             f.write(np.array2string(cm, separator=', '))
             f.write("\n")
-        print(f"✅ Testing results saved to: {filename}")
+        print(f"Testing results saved to: {filename}")
 
     def XGBoost_output_test_metrics(self, y_pred, model_name):
         # Accuracy
@@ -368,12 +360,6 @@ class Forecaster:
         print(report)
 
         # Confusion matrix
-        # cm = confusion_matrix(self.y_test, y_pred)
-        # disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=[1, 2, 3, 4, 5])
-        # disp.plot(cmap="Blues")
-        # plt.title("Confusion Matrix (Quantile Classifier)")
-        # plt.show()
-
         cm = confusion_matrix(self.y_test, y_pred)
         classes = np.unique(self.y_test)  # [0, 1, 2, 3]
         disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=classes)
@@ -410,4 +396,4 @@ class Forecaster:
             f.write("\nConfusion Matrix:\n")
             f.write(np.array2string(cm, separator=', '))
             f.write("\n")
-        print(f"✅ Testing results saved to: {filename}")
+        print(f"Testing results saved to: {filename}")
